@@ -128,12 +128,18 @@ async def submit_answer(code: str, req: dict, db: AsyncSession = Depends(get_db)
         time_taken_ms = req.get("time_taken_ms", 30000)
         speed_bonus = max(0, int((30000 - time_taken_ms) / 1000))
         player.score += 100 + speed_bonus
+    await db.commit()
+    if not correct:
+        pass
+    else:
         await db.commit()
+    
     await manager.broadcast(code.upper(), {
         "event": "answer_result",
         "player_id": player.id,
         "player_name": player.name,
         "correct": correct,
+        "correct_answer": question.correct_answer,
         "score": player.score
     })
     return {"correct": correct, "score": player.score, "correct_answer": question.correct_answer}
