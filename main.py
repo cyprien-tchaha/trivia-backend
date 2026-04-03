@@ -9,11 +9,8 @@ app = FastAPI(title="Trivia API", version="0.1.0")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://localhost:3000",
-        os.getenv("FRONTEND_URL", "http://localhost:3000"),
-    ],
-    allow_credentials=True,
+    allow_origins=["*"],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
