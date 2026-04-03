@@ -1,0 +1,137 @@
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
+from app.database import get_db
+from app.models import Game, Player
+from app.schemas import CreateGameRequest, JoinGameRequest
+from app.websocket.manager import manager
+import random, string
+
+router = APIRouter()
+
+def gen_code(length=6):
+    return ''.join(random.choices(string.ascii_uppercase, k=length))
+
+@router.post("/create")
+async def create_game(req: CreateGameRequest, db: AsyncSession = Depends(get_db)):
+    code = gen_code()
+    game = Game(
+        code=code,
+        host_name=req.host_name,
+        category=req.category,
+        difficulty=req.difficulty,
+        question_count=req.question_count,
+    )
+    db.add(game)
+    await db.commit()
+    await db.refresh(game)
+    return {
+        "game_id": game.id,
+        "code": game.code,
+        "host_name": game.host_name,
+        "category": game.category,
+        "difficulty": game.difficulty,
+        "question_count": game.question_count,
+    }
+
+@router.post("/{code}/join")
+async def join_game(code: str, req: JoinGameRequest, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Game).where(Game.code == code.upper()))
+    game = result.scalar_one_or_none()
+    if not game:
+        raise HTTPException(status_code=404, detail="Game not found")
+    if game.status != "lobby":
+        raise HTTPException(status_code=400, detail="Game already started")
+    player = Player(game_id=game.id, name=req.player_name)
+    db.add(player)
+    await db.commit()
+    await db.refresh(player)
+    await manager.broadcast(code.upper(), {
+        "event": "player_joined",
+        "player": {"id": player.id, "name": player.name, "score": 0}
+    })
+    return {"player_id": player.id, "game_id": game.id, "code": code.upper()}
+
+@router.get("/{code}/players")
+async def get_players(code: str, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Game).where(Game.code == code.upper()))
+    game = result.scalar_one_or_none()
+    if not game:
+        raise HTTPException(status_code=404, detail="Game not found")
+    result = await db.execute(select(Player).where(Player.game_id == game.id))
+    players = result.scalars().all()
+    return [{"id": p.id, "name": p.name, "score": p.score} for p in players]
+
+@router.get("/{code}")
+async def get_game(code: str, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Game).where(Game.code == code.upper()))
+    game = result.scalar_one_or_none()
+    if not game:
+        raise HTTPException(status_code=404, detail="Game not found")
+    return {
+        "game_id": game.id,
+        "code": game.code,
+        "host_name": game.host_name,
+        "status": game.status,
+        "category": game.category,
+        "difficulty": game.difficulty,
+        "question_count": game.question_count,
+    }
+
+@router.post("/{code}/start")
+async def start_game(code: str, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Game).where(Game.code == code.upper()))
+    game = result.scalar_one_or_none()
+    if not game:
+        raise HTTPException(status_code=404, detail="Game not found")
+    game.status = "active"
+    await db.commit()
+    await manager.broadcast(code.upper(), {"event": "game_started"})
+    return {"status": "started"}
+
+@router.post("/{code}/finish")
+async def finish_game(code: str, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Game).where(Game.code == code.upper()))
+    game = result.scalar_one_or_none()
+    if not game:
+        raise HTTPException(status_code=404, detail="Game not found")
+    game.status = "finished"
+    await db.commit()
+    result = await db.execute(select(Player).where(Player.game_id == game.id))
+    players = result.scalars().all()
+    player_list = [{"id": p.id, "name": p.name, "score": p.score} for p in players]
+    await manager.broadcast(code.upper(), {
+        "event": "game_finished",
+        "players": player_list
+    })
+    return {"status": "finished", "players": player_list}
+
+@router.post("/{code}/answer")
+async def submit_answer(code: str, req: dict, db: AsyncSession = Depends(get_db)):
+    from app.models import Question
+    result = await db.execute(select(Game).where(Game.code == code.upper()))
+    game = result.scalar_one_or_none()
+    if not game:
+        raise HTTPException(status_code=404, detail="Game not found")
+    result = await db.execute(select(Player).where(Player.id == req.get("player_id")))
+    player = result.scalar_one_or_none()
+    if not player:
+        raise HTTPException(status_code=404, detail="Player not found")
+    result = await db.execute(select(Question).where(Question.id == req.get("question_id")))
+    question = result.scalar_one_or_none()
+    if not question:
+        raise HTTPException(status_code=404, detail="Question not found")
+    correct = req.get("answer") == question.correct_answer
+    if correct:
+        time_taken_ms = req.get("time_taken_ms", 30000)
+        speed_bonus = max(0, int((30000 - time_taken_ms) / 1000))
+        player.score += 100 + speed_bonus
+        await db.commit()
+    await manager.broadcast(code.upper(), {
+        "event": "answer_result",
+        "player_id": player.id,
+        "player_name": player.name,
+        "correct": correct,
+        "score": player.score
+    })
+    return {"correct": correct, "score": player.score, "correct_answer": question.correct_answer}
