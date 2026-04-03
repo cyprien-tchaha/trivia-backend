@@ -7,11 +7,11 @@ from app.services.ai_service import generate_questions
 
 router = APIRouter()
 
-async def create_ai_questions(game_id: str, category: str, difficulty: int, count: int):
+async def create_ai_questions(game_id: str, category: str, difficulty: int, count: int, topics: str = ""):
     from app.database import AsyncSessionLocal
     async with AsyncSessionLocal() as db:
         try:
-            questions = await generate_questions(category, difficulty, count)
+            questions = await generate_questions(category, difficulty, count, topics)
             for i, q in enumerate(questions):
                 question = Question(
                     game_id=game_id,
@@ -105,5 +105,6 @@ async def generate_game_questions(
         game.category,
         game.difficulty,
         game.question_count,
+        game.topics,
     )
     return {"status": "generating", "message": "Questions are being generated"}

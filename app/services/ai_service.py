@@ -25,11 +25,19 @@ async def generate_questions(
     category: str,
     difficulty: int,
     count: int = 10,
+    topics: str = "",
 ) -> list[dict]:
     category_desc = CATEGORY_PROMPTS.get(category, "anime")
     difficulty_desc = DIFFICULTY_DESCRIPTIONS.get(difficulty, "medium difficulty")
 
-    prompt = f"""Generate {count} trivia questions about {category_desc}.
+    if topics.strip():
+        topic_list = [t.strip() for t in topics.split(",") if t.strip()]
+        topics_desc = ", ".join(topic_list)
+        subject = f"specifically about these titles: {topics_desc}"
+    else:
+        subject = f"about {category_desc}"
+
+    prompt = f"""Generate {count} trivia questions {subject}.
 
 Difficulty level: {difficulty}/5 — {difficulty_desc}
 
@@ -37,7 +45,8 @@ Requirements:
 - Each question must have exactly 4 answer options
 - Only one answer must be correct
 - Questions should be clear and unambiguous
-- Vary the topics across different shows/series
+- Vary the questions across different aspects (characters, plot, trivia, quotes)
+- If multiple titles are given, spread questions across all of them
 - Do not repeat questions
 
 Respond with ONLY a JSON array, no other text, no markdown, no backticks.

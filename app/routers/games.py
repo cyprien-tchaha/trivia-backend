@@ -21,6 +21,7 @@ async def create_game(req: CreateGameRequest, db: AsyncSession = Depends(get_db)
         category=req.category,
         difficulty=req.difficulty,
         question_count=req.question_count,
+        topics=req.topics,
     )
     db.add(game)
     await db.commit()
@@ -76,6 +77,7 @@ async def get_game(code: str, db: AsyncSession = Depends(get_db)):
         "category": game.category,
         "difficulty": game.difficulty,
         "question_count": game.question_count,
+        "topics": game.topics,
     }
 
 @router.post("/{code}/start")

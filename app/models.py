@@ -14,6 +14,7 @@ class Game(Base):
     status                 = Column(String, default="lobby")
     category               = Column(String, default="anime")
     difficulty             = Column(Integer, default=1)
+    topics                 = Column(String, default="")
     question_count         = Column(Integer, default=10)
     current_question_index = Column(Integer, default=0)
     created_at             = Column(DateTime(timezone=True), server_default=func.now())

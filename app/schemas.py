@@ -5,6 +5,7 @@ class CreateGameRequest(BaseModel):
     category: str = "anime"
     difficulty: int = 1
     question_count: int = 10
+    topics: str = ""
 
 class JoinGameRequest(BaseModel):
     player_name: str
