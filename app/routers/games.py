@@ -143,3 +143,13 @@ async def submit_answer(code: str, req: dict, db: AsyncSession = Depends(get_db)
         "score": player.score
     })
     return {"correct": correct, "score": player.score, "correct_answer": question.correct_answer}
+
+@router.post("/{code}/question/{index}")
+async def set_question_index(code: str, index: int, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Game).where(Game.code == code.upper()))
+    game = result.scalar_one_or_none()
+    if not game:
+        raise HTTPException(status_code=404, detail="Game not found")
+    game.current_question_index = index
+    await db.commit()
+    return {"status": "ok", "current_question_index": index}
