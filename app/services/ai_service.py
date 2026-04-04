@@ -14,11 +14,11 @@ CATEGORY_PROMPTS = {
 }
 
 DIFFICULTY_DESCRIPTIONS = {
-    1: "very easy, suitable for casual fans who have only seen popular shows",
-    2: "easy, for fans familiar with popular titles",
-    3: "medium difficulty, for dedicated fans who watch regularly",
-    4: "hard, for enthusiasts with deep knowledge",
-    5: "very hard, for experts with encyclopedic knowledge of obscure details",
+    1: "very easy. Ask about main character names, iconic catchphrases, or the most well-known plot points that anyone who watched the show would know.",
+    2: "easy. Ask about supporting characters, basic plot events, and well-known facts that a casual fan would know after watching a full season.",
+    3: "medium. Ask about specific episode events, character backstories, relationships between characters, and details that only someone who watched the full series would know.",
+    4: "hard. Ask about obscure character names, specific episode details, minor plot points, exact quotes, and facts that only a dedicated fan who rewatched the series would know.",
+    5: "extremely hard. Ask about the most obscure details — background characters, minor episode references, exact dialogue, production trivia, episode numbers, director names, and facts that only a true expert with encyclopedic knowledge would know. These questions should be very difficult even for hardcore fans.",
 }
 
 async def generate_questions(
@@ -41,6 +41,8 @@ async def generate_questions(
 
 Difficulty level: {difficulty}/5 — {difficulty_desc}
 
+IMPORTANT: You MUST strictly follow the difficulty level. Level 1 should be obvious to anyone. Level 5 should stump even hardcore fans.
+
 Requirements:
 - Each question must have exactly 4 answer options
 - Only one answer must be correct
@@ -48,6 +50,8 @@ Requirements:
 - Vary the questions across different aspects (characters, plot, trivia, quotes)
 - If multiple titles are given, spread questions across all of them
 - Do not repeat questions
+- Wrong answer options should be plausible but clearly wrong to someone who knows the answer
+- For difficulty 4-5, avoid questions about main characters or obvious plot points
 
 Respond with ONLY a JSON array, no other text, no markdown, no backticks.
 Format:
