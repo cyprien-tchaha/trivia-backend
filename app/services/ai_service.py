@@ -21,6 +21,58 @@ DIFFICULTY_DESCRIPTIONS = {
     5: "extremely hard. Ask about the most obscure details — background characters, minor episode references, exact dialogue, production trivia, episode numbers, director names, and facts that only a true expert with encyclopedic knowledge would know. These questions should be very difficult even for hardcore fans.",
 }
 
+async def validate_topics(topics: str) -> dict:
+    if not topics.strip():
+        return {"valid": True, "corrected": "", "unknown": []}
+    
+    topic_list = [t.strip() for t in topics.split(",") if t.strip()]
+    
+    prompt = f"""You are a knowledge validator. For each title in this list, check if it is a real anime, manga, TV show, or movie.
+
+List: {', '.join(topic_list)}
+
+For each title:
+1. If it exists, return the correctly spelled official title
+2. If it is misspelled but you can identify it, return the correct spelling
+3. If it does not exist or you cannot identify it, mark it as unknown
+
+Respond ONLY with a JSON object, no other text:
+{{
+  "results": [
+    {{"input": "original input", "found": true, "corrected": "Official Title"}},
+    {{"input": "unknown show", "found": false, "corrected": ""}}
+  ]
+}}"""
+
+    response = await client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[
+            {"role": "system", "content": "You validate whether TV shows and anime exist. Respond only with valid JSON."},
+            {"role": "user", "content": prompt}
+        ],
+        temperature=0,
+        max_tokens=500,
+    )
+    
+    raw = response.choices[0].message.content.strip()
+    raw = re.sub(r"^```json\s*", "", raw)
+    raw = re.sub(r"^```\s*", "", raw)
+    raw = re.sub(r"\s*```$", "", raw)
+    
+    data = json.loads(raw)
+    results = data.get("results", [])
+    
+    unknown = [r["input"] for r in results if not r["found"]]
+    corrected_list = [r["corrected"] for r in results if r["found"]]
+    corrected = ", ".join(corrected_list)
+    
+    return {
+        "valid": len(unknown) == 0,
+        "corrected": corrected,
+        "unknown": unknown,
+        "found": corrected_list,
+    }
+
 async def generate_questions(
     category: str,
     difficulty: int,
@@ -41,17 +93,20 @@ async def generate_questions(
 
 Difficulty level: {difficulty}/5 — {difficulty_desc}
 
-IMPORTANT: You MUST strictly follow the difficulty level. Level 1 should be obvious to anyone. Level 5 should stump even hardcore fans.
-
-Requirements:
+STRICT RULES — follow these exactly:
+- NEVER ask about episode numbers, episode titles, or episode counts
+- NEVER ask about directors, animators, or production staff unless they are extremely famous (e.g. Hayao Miyazaki)
+- NEVER ask about manga chapter numbers or volume numbers
+- NEVER ask about release dates or airing schedules
+- FOCUS questions on: characters, their personalities, abilities, relationships, story arcs, plot events, quotes, rivalries, transformations, factions, and world-building
+- For TV shows it is acceptable to ask about real actor names or famous real-world facts about the show
 - Each question must have exactly 4 answer options
 - Only one answer must be correct
+- Wrong answer options must be plausible — other characters or things from the same show
 - Questions should be clear and unambiguous
-- Vary the questions across different aspects (characters, plot, trivia, quotes)
-- If multiple titles are given, spread questions across all of them
+- If multiple titles are given, spread questions evenly across all of them
 - Do not repeat questions
-- Wrong answer options should be plausible but clearly wrong to someone who knows the answer
-- For difficulty 4-5, avoid questions about main characters or obvious plot points
+- IMPORTANT: You MUST strictly follow the difficulty level. Level 1 = obvious to any casual viewer. Level 5 = only a superfan who has rewatched everything would know.
 
 Respond with ONLY a JSON array, no other text, no markdown, no backticks.
 Format:

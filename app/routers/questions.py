@@ -108,3 +108,15 @@ async def generate_game_questions(
         game.topics,
     )
     return {"status": "generating", "message": "Questions are being generated"}
+
+@router.post("/validate-topics")
+async def validate_topics_endpoint(req: dict):
+    from app.services.ai_service import validate_topics
+    topics = req.get("topics", "")
+    if not topics.strip():
+        return {"valid": True, "corrected": "", "unknown": [], "found": []}
+    try:
+        result = await validate_topics(topics)
+        return result
+    except Exception as e:
+        return {"valid": True, "corrected": topics, "unknown": [], "found": []}
