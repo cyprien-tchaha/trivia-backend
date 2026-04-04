@@ -14,11 +14,41 @@ CATEGORY_PROMPTS = {
 }
 
 DIFFICULTY_DESCRIPTIONS = {
-    1: "very easy. Ask about main character names, iconic catchphrases, or the most well-known plot points that anyone who watched the show would know.",
-    2: "easy. Ask about supporting characters, basic plot events, and well-known facts that a casual fan would know after watching a full season.",
-    3: "medium. Ask about specific episode events, character backstories, relationships between characters, and details that only someone who watched the full series would know.",
-    4: "hard. Ask about obscure character names, specific episode details, minor plot points, exact quotes, and facts that only a dedicated fan who rewatched the series would know.",
-    5: "extremely hard. Ask about the most obscure details — background characters, minor episode references, exact dialogue, production trivia, episode numbers, director names, and facts that only a true expert with encyclopedic knowledge would know. These questions should be very difficult even for hardcore fans.",
+        1: """VERY EASY. Questions a first-time viewer would know after watching 1-2 episodes.
+    Examples of acceptable questions:
+    - What is the main character's name?
+    - What color is [character]'s hair?
+    - What is the name of the main group/crew/team?""",
+
+        2: """EASY. Questions a casual fan who finished the show would know.
+    Examples of acceptable questions:
+    - What is [character]'s special ability or power?
+    - Who is the main villain in season 1?
+    - What is the relationship between [character A] and [character B]?""",
+
+        3: """MEDIUM. Questions that require having paid close attention to the full series.
+    Examples of acceptable questions:
+    - What was [character]'s motivation for betraying the group?
+    - What is the name of [character]'s hometown or origin?
+    - What technique/move did [character] use to defeat [villain]?""",
+
+        4: """HARD. Questions only a dedicated fan who watched everything carefully would know.
+    Examples of acceptable questions:
+    - What specific condition triggers [character]'s hidden power?
+    - What was the name of [minor character]'s faction or organization?
+    - What did [character] say to [character] before [specific plot event]?
+    AVOID anything a casual fan would know.""",
+
+        5: """EXTREMELY HARD — EXPERT LEVEL ONLY. These must be genuinely difficult questions that would stump most fans.
+    Examples of acceptable questions:
+    - What is the full name of [minor supporting character]?
+    - What secret was revealed about [character] in the final arc that contradicts earlier events?
+    - What is the name of the ancient technique/artifact/location only mentioned once?
+    RULES FOR LEVEL 5:
+    - Do NOT ask about main characters' basic traits or abilities
+    - Do NOT ask anything that would be on the show's Wikipedia summary
+    - Ask about minor characters, specific dialogue, obscure lore, and details easy to miss
+    - Every question should make even hardcore fans think hard"""
 }
 
 async def validate_topics(topics: str) -> dict:
