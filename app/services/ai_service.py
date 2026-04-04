@@ -75,9 +75,9 @@ Respond ONLY with a JSON object, no other text:
 }}"""
 
     response = await client.chat.completions.create(
-        model="gpt-4o-mini",
+        model="gpt-4o",
         messages=[
-            {"role": "system", "content": "You validate whether TV shows and anime exist. Respond only with valid JSON."},
+            {"role": "system", "content": "You are an expert trivia question generator specializing in difficult, obscure questions. You strictly follow difficulty levels — level 5 questions must be genuinely hard even for superfans. You respond only with valid JSON arrays. Never include markdown, backticks, or any text outside the JSON array."},
             {"role": "user", "content": prompt}
         ],
         temperature=0,
