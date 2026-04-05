@@ -51,7 +51,6 @@ RULES FOR LEVEL 5:
 - Every question should make even hardcore fans think hard"""
 }
 
-
 async def generate_questions(
     category: str,
     difficulty: int,
@@ -68,7 +67,16 @@ async def generate_questions(
     else:
         subject = f"about {category_desc}"
 
-    prompt = f"""Generate {count} trivia questions {subject}.
+    all_verified = []
+    attempts = 0
+    max_attempts = 3
+
+    while len(all_verified) < count and attempts < max_attempts:
+        needed = count - len(all_verified)
+        # Request extra to account for verification rejections
+        request_count = needed + max(3, needed // 2)
+
+        prompt = f"""Generate {request_count} trivia questions {subject}.
 
 Difficulty level: {difficulty}/5 — {difficulty_desc}
 
@@ -98,47 +106,80 @@ Format:
   }}
 ]"""
 
-    response = await client.messages.create(
-        model="claude-opus-4-5",
-        max_tokens=4000,
-        messages=[
-            {
-                "role": "user",
-                "content": prompt
-            }
+        response = await client.messages.create(
+            model="claude-opus-4-5",
+            max_tokens=4000,
+            messages=[{"role": "user", "content": prompt}],
+        )
+
+        raw = response.content[0].text.strip()
+        raw = re.sub(r"^```json\s*", "", raw)
+        raw = re.sub(r"^```\s*", "", raw)
+        raw = re.sub(r"\s*```$", "", raw)
+        raw = raw.strip()
+
+        questions = json.loads(raw)
+
+        # Filter structurally valid questions
+        valid = []
+        existing_texts = {q["text"] for q in all_verified}
+        for q in questions:
+            if (
+                isinstance(q, dict)
+                and "text" in q
+                and "options" in q
+                and "correct_answer" in q
+                and len(q["options"]) == 4
+                and q["correct_answer"] in q["options"]
+                and q["text"] not in existing_texts
+            ):
+                valid.append({
+                    "text": q["text"],
+                    "options": q["options"],
+                    "correct_answer": q["correct_answer"],
+                    "difficulty": difficulty,
+                    "category": category,
+                })
+                existing_texts.add(q["text"])
+
+        # Verify this batch
+        verified_batch = await verify_questions(valid, topics or category_desc)
+        all_verified.extend(verified_batch)
+        attempts += 1
+        print(f"Attempt {attempts}: {len(verified_batch)}/{len(valid)} passed, total: {len(all_verified)}/{count}")
+
+    # If after 3 attempts we still don't have enough, use fallback for the gap
+    if len(all_verified) < count:
+        print(f"Warning: only {len(all_verified)} verified questions, filling with fallback")
+        fallback = _get_fallback_questions(category, difficulty)
+        existing_texts = {q["text"] for q in all_verified}
+        for q in fallback:
+            if len(all_verified) >= count:
+                break
+            if q["text"] not in existing_texts:
+                all_verified.append(q)
+
+    return all_verified[:count]
+
+
+def _get_fallback_questions(category: str, difficulty: int) -> list[dict]:
+    fallback = {
+        "anime": [
+            {"text": "In Naruto, what is the name of Naruto's signature jutsu?", "options": ["Chidori", "Rasengan", "Shadow Clone", "Eight Gates"], "correct_answer": "Rasengan", "difficulty": difficulty, "category": category},
+            {"text": "Which anime features the Survey Corps fighting Titans?", "options": ["Demon Slayer", "One Piece", "Attack on Titan", "Bleach"], "correct_answer": "Attack on Titan", "difficulty": difficulty, "category": category},
+            {"text": "What is the name of the main character in Death Note?", "options": ["Light Yagami", "L Lawliet", "Near", "Mello"], "correct_answer": "Light Yagami", "difficulty": difficulty, "category": category},
+            {"text": "Which studio animated Spirited Away?", "options": ["Toei Animation", "Madhouse", "Studio Ghibli", "Gainax"], "correct_answer": "Studio Ghibli", "difficulty": difficulty, "category": category},
+            {"text": "What sword style does Roronoa Zoro use?", "options": ["One Sword Style", "Two Sword Style", "Three Sword Style", "Four Sword Style"], "correct_answer": "Three Sword Style", "difficulty": difficulty, "category": category},
         ],
-    )
-
-    raw = response.content[0].text.strip()
-    raw = re.sub(r"^```json\s*", "", raw)
-    raw = re.sub(r"^```\s*", "", raw)
-    raw = re.sub(r"\s*```$", "", raw)
-    raw = raw.strip()
-
-    questions = json.loads(raw)
-
-    validated = []
-    for q in questions:
-        if (
-            isinstance(q, dict)
-            and "text" in q
-            and "options" in q
-            and "correct_answer" in q
-            and len(q["options"]) == 4
-            and q["correct_answer"] in q["options"]
-        ):
-            validated.append({
-                "text": q["text"],
-                "options": q["options"],
-                "correct_answer": q["correct_answer"],
-                "difficulty": difficulty,
-                "category": category,
-            })
-
-    # Pass 2 — verify factual accuracy
-    verified = await verify_questions(validated, topics or category_desc)
-    return verified[:count]
-
+        "tv": [
+            {"text": "In Breaking Bad, what is Walter White's drug pseudonym?", "options": ["The Cook", "Heisenberg", "Blue Sky", "Mr. White"], "correct_answer": "Heisenberg", "difficulty": difficulty, "category": category},
+            {"text": "What city is The Office (US) set in?", "options": ["Philadelphia", "Pittsburgh", "Scranton", "Allentown"], "correct_answer": "Scranton", "difficulty": difficulty, "category": category},
+            {"text": "In Game of Thrones, what is the sigil of House Stark?", "options": ["Lion", "Dragon", "Direwolf", "Stag"], "correct_answer": "Direwolf", "difficulty": difficulty, "category": category},
+            {"text": "What is the name of the coffee shop in Friends?", "options": ["Central Perk", "The Grind", "Java Joe's", "Perks"], "correct_answer": "Central Perk", "difficulty": difficulty, "category": category},
+            {"text": "Who plays Eleven in Stranger Things?", "options": ["Sadie Sink", "Millie Bobby Brown", "Natalia Dyer", "Finn Wolfhard"], "correct_answer": "Millie Bobby Brown", "difficulty": difficulty, "category": category},
+        ],
+    }
+    return fallback.get(category, fallback["anime"])
 
 async def verify_questions(questions: list[dict], subject: str) -> list[dict]:
     if not questions:
