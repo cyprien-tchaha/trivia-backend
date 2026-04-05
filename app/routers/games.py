@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.database import get_db
-from app.models import Game, Player
+from app.models import Game, Player, Question
 from app.schemas import CreateGameRequest, JoinGameRequest
 from app.websocket.manager import manager
 import random, string
@@ -153,3 +153,29 @@ async def set_question_index(code: str, index: int, db: AsyncSession = Depends(g
     game.current_question_index = index
     await db.commit()
     return {"status": "ok", "current_question_index": index}
+
+@router.post("/{code}/reset")
+async def reset_game(code: str, db: AsyncSession = Depends(get_db)):
+    result = await db.execute(select(Game).where(Game.code == code.upper()))
+    game = result.scalar_one_or_none()
+    if not game:
+        raise HTTPException(status_code=404, detail="Game not found")
+    
+    # Delete old questions
+    from sqlalchemy import delete
+    await db.execute(delete(Question).where(Question.game_id == game.id))
+    
+    # Reset game state
+    game.status = "lobby"
+    game.current_question_index = 0
+    await db.commit()
+    
+    # Reset player scores
+    result = await db.execute(select(Player).where(Player.game_id == game.id))
+    players = result.scalars().all()
+    for player in players:
+        player.score = 0
+    await db.commit()
+    
+    await manager.broadcast(code.upper(), {"event": "game_reset"})
+    return {"status": "reset"}
