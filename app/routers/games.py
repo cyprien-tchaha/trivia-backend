@@ -142,6 +142,28 @@ async def submit_answer(code: str, req: dict, db: AsyncSession = Depends(get_db)
         "correct_answer": question.correct_answer,
         "score": player.score
     })
+
+    # Check if all players have answered
+    all_players_result = await db.execute(
+        select(Player).where(Player.game_id == game.id)
+    )
+    all_players = all_players_result.scalars().all()
+
+    # Count answers for this question by checking scores changed
+    # Simple approach: broadcast all_answered when answer count matches player count
+    # We track this via a simple in-memory counter using the manager
+    room_key = f"{code.upper()}_q{question.order_index}"
+    if not hasattr(manager, 'answer_counts'):
+        manager.answer_counts = {}
+    manager.answer_counts[room_key] = manager.answer_counts.get(room_key, 0) + 1
+
+    if manager.answer_counts[room_key] >= len(all_players):
+        await manager.broadcast(code.upper(), {
+            "event": "all_answered",
+            "correct_answer": question.correct_answer,
+        })
+        manager.answer_counts[room_key] = 0
+
     return {"correct": correct, "score": player.score, "correct_answer": question.correct_answer}
 
 @router.post("/{code}/question/{index}")
@@ -150,6 +172,10 @@ async def set_question_index(code: str, index: int, db: AsyncSession = Depends(g
     game = result.scalar_one_or_none()
     if not game:
         raise HTTPException(status_code=404, detail="Game not found")
+    # Reset answer count for previous question
+    if hasattr(manager, 'answer_counts'):
+        old_key = f"{code.upper()}_q{game.current_question_index}"
+        manager.answer_counts[old_key] = 0
     game.current_question_index = index
     await db.commit()
     return {"status": "ok", "current_question_index": index}
