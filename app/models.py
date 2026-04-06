@@ -1,4 +1,4 @@
-from sqlalchemy import Column, String, Integer, DateTime, ForeignKey, JSON
+from sqlalchemy import Column, String, Integer, DateTime, ForeignKey, JSON, Boolean
 from sqlalchemy.sql import func
 from app.database import Base
 import uuid
@@ -36,3 +36,13 @@ class Question(Base):
     difficulty     = Column(Integer, default=1)
     category       = Column(String, default="anime")
     order_index    = Column(Integer, default=0)
+
+class Answer(Base):
+    __tablename__ = "answers"
+    id          = Column(String, primary_key=True, default=gen_uuid)
+    game_id     = Column(String, ForeignKey("games.id"), nullable=False)
+    player_id   = Column(String, ForeignKey("players.id"), nullable=False)
+    question_id = Column(String, ForeignKey("questions.id"), nullable=False)
+    answer      = Column(String, nullable=False)
+    correct     = Column(Boolean, default=False)
+    created_at  = Column(DateTime(timezone=True), server_default=func.now())

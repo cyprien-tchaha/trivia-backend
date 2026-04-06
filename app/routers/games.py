@@ -43,6 +43,17 @@ async def join_game(code: str, req: JoinGameRequest, db: AsyncSession = Depends(
         raise HTTPException(status_code=404, detail="Game not found")
     if game.status != "lobby":
         raise HTTPException(status_code=400, detail="Game already started")
+    # Check if player with same name already exists in this game
+    existing_player_result = await db.execute(
+        select(Player).where(
+            Player.game_id == game.id,
+            Player.name == req.player_name
+        )
+    )
+    existing = existing_player_result.scalar_one_or_none()
+    if existing:
+        return {"player_id": existing.id, "game_id": game.id, "code": code.upper()}
+
     player = Player(game_id=game.id, name=req.player_name)
     db.add(player)
     await db.commit()
@@ -110,30 +121,55 @@ async def finish_game(code: str, db: AsyncSession = Depends(get_db)):
 
 @router.post("/{code}/answer")
 async def submit_answer(code: str, req: dict, db: AsyncSession = Depends(get_db)):
-    from app.models import Question
+    from app.models import Question, Answer
+    from sqlalchemy import and_
+
     result = await db.execute(select(Game).where(Game.code == code.upper()))
     game = result.scalar_one_or_none()
     if not game:
         raise HTTPException(status_code=404, detail="Game not found")
+
     result = await db.execute(select(Player).where(Player.id == req.get("player_id")))
     player = result.scalar_one_or_none()
     if not player:
         raise HTTPException(status_code=404, detail="Player not found")
+
     result = await db.execute(select(Question).where(Question.id == req.get("question_id")))
     question = result.scalar_one_or_none()
     if not question:
         raise HTTPException(status_code=404, detail="Question not found")
+
+    # Check if player already answered this question
+    existing = await db.execute(
+        select(Answer).where(
+            and_(
+                Answer.player_id == player.id,
+                Answer.question_id == question.id,
+            )
+        )
+    )
+    if existing.scalar_one_or_none():
+        # Already answered — return their existing score silently
+        return {"correct": False, "score": player.score, "correct_answer": question.correct_answer, "duplicate": True}
+
+    # Record the answer
     correct = req.get("answer") == question.correct_answer
+    answer_record = Answer(
+        game_id=game.id,
+        player_id=player.id,
+        question_id=question.id,
+        answer=req.get("answer", ""),
+        correct=correct,
+    )
+    db.add(answer_record)
+
     if correct:
-        time_taken_ms = req.get("time_taken_ms", 30000)
-        speed_bonus = max(0, int((30000 - time_taken_ms) / 1000))
+        time_taken_ms = req.get("time_taken_ms", 60000)
+        speed_bonus = max(0, int((60000 - time_taken_ms) / 1000))
         player.score += 100 + speed_bonus
+
     await db.commit()
-    if not correct:
-        pass
-    else:
-        await db.commit()
-    
+
     await manager.broadcast(code.upper(), {
         "event": "answer_result",
         "player_id": player.id,
@@ -143,26 +179,27 @@ async def submit_answer(code: str, req: dict, db: AsyncSession = Depends(get_db)
         "score": player.score
     })
 
-    # Check if all players have answered
+    # Check if all players have answered this question
     all_players_result = await db.execute(
         select(Player).where(Player.game_id == game.id)
     )
     all_players = all_players_result.scalars().all()
 
-    # Count answers for this question by checking scores changed
-    # Simple approach: broadcast all_answered when answer count matches player count
-    # We track this via a simple in-memory counter using the manager
-    room_key = f"{code.upper()}_q{question.order_index}"
-    if not hasattr(manager, 'answer_counts'):
-        manager.answer_counts = {}
-    manager.answer_counts[room_key] = manager.answer_counts.get(room_key, 0) + 1
+    answered_result = await db.execute(
+        select(Answer).where(
+            and_(
+                Answer.game_id == game.id,
+                Answer.question_id == question.id,
+            )
+        )
+    )
+    answered_count = len(answered_result.scalars().all())
 
-    if manager.answer_counts[room_key] >= len(all_players):
+    if answered_count >= len(all_players):
         await manager.broadcast(code.upper(), {
             "event": "all_answered",
             "correct_answer": question.correct_answer,
         })
-        manager.answer_counts[room_key] = 0
 
     return {"correct": correct, "score": player.score, "correct_answer": question.correct_answer}
 
