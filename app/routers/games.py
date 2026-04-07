@@ -242,3 +242,33 @@ async def reset_game(code: str, db: AsyncSession = Depends(get_db)):
     
     await manager.broadcast(code.upper(), {"event": "game_reset"})
     return {"status": "reset"}
+
+@router.get("/{code}/player-answer/{player_id}/{question_id}")
+async def get_player_answer(code: str, player_id: str, question_id: str, db: AsyncSession = Depends(get_db)):
+    from app.models import Answer
+    result = await db.execute(
+        select(Answer).where(
+            Answer.player_id == player_id,
+            Answer.question_id == question_id,
+        )
+    )
+    answer = result.scalar_one_or_none()
+    if not answer:
+        return {"answered": False}
+    
+    # Get player score
+    player_result = await db.execute(select(Player).where(Player.id == player_id))
+    player = player_result.scalar_one_or_none()
+    
+    # Get correct answer
+    from app.models import Question
+    q_result = await db.execute(select(Question).where(Question.id == question_id))
+    question = q_result.scalar_one_or_none()
+    
+    return {
+        "answered": True,
+        "answer": answer.answer,
+        "correct": answer.correct,
+        "correct_answer": question.correct_answer if question else "",
+        "score": player.score if player else 0,
+    }
