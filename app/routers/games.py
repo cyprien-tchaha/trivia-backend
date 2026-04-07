@@ -196,10 +196,14 @@ async def submit_answer(code: str, req: dict, db: AsyncSession = Depends(get_db)
     answered_count = len(answered_result.scalars().all())
 
     # Only count active players (those still in the game)
-    active_players = [p for p in all_players if p.id in 
-                      [a.player_id for a in answered_result.scalars()]]
-    
-    # Re-fetch answers since we already consumed the result
+    # Re-fetch current active players (excludes anyone who left)
+    active_players_result = await db.execute(
+        select(Player).where(Player.game_id == game.id)
+    )
+    active_players = active_players_result.scalars().all()
+    active_player_count = len(active_players)
+
+    # Count answers for this question
     answered_result2 = await db.execute(
         select(Answer).where(
             and_(
@@ -208,10 +212,9 @@ async def submit_answer(code: str, req: dict, db: AsyncSession = Depends(get_db)
             )
         )
     )
-    answered_players = [a.player_id for a in answered_result2.scalars().all()]
-    active_player_count = len(all_players)
+    answered_count2 = len(answered_result2.scalars().all())
 
-    if answered_count >= active_player_count:
+    if active_player_count > 0 and answered_count2 >= active_player_count:
         await manager.broadcast(code.upper(), {
             "event": "all_answered",
             "correct_answer": question.correct_answer,
