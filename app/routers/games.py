@@ -341,7 +341,8 @@ async def resume_game(code: str, player_id: str, db: AsyncSession = Depends(get_
 
 @router.post("/{code}/leave")
 async def leave_game(code: str, request: Request, db: AsyncSession = Depends(get_db)):
-    from fastapi import Request
+    from app.models import Answer, Question
+    from sqlalchemy import and_
     try:
         body = await request.json()
         player_id = body.get("player_id")
@@ -356,6 +357,12 @@ async def leave_game(code: str, request: Request, db: AsyncSession = Depends(get
     if not player:
         return {"status": "ok"}
 
+    game_id = player.game_id
+
+    # Get game to find current question
+    game_result = await db.execute(select(Game).where(Game.id == game_id))
+    game = game_result.scalar_one_or_none()
+
     await db.delete(player)
     await db.commit()
 
@@ -363,5 +370,38 @@ async def leave_game(code: str, request: Request, db: AsyncSession = Depends(get
         "event": "player_left",
         "player_id": player_id,
     })
+
+    # After removing player, check if remaining players have all answered
+    if game:
+        active_result = await db.execute(
+            select(Player).where(Player.game_id == game_id)
+        )
+        active_players = active_result.scalars().all()
+
+        if len(active_players) > 0:
+            # Get current question
+            q_result = await db.execute(
+                select(Question)
+                .where(Question.game_id == game_id)
+                .where(Question.order_index == game.current_question_index)
+            )
+            current_question = q_result.scalar_one_or_none()
+
+            if current_question:
+                answered_result = await db.execute(
+                    select(Answer).where(
+                        and_(
+                            Answer.game_id == game_id,
+                            Answer.question_id == current_question.id,
+                        )
+                    )
+                )
+                answered_count = len(answered_result.scalars().all())
+
+                if answered_count >= len(active_players):
+                    await manager.broadcast(code.upper(), {
+                        "event": "all_answered",
+                        "correct_answer": current_question.correct_answer,
+                    })
 
     return {"status": "ok"}
