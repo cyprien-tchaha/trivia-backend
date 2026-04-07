@@ -319,3 +319,24 @@ async def resume_game(code: str, player_id: str, db: AsyncSession = Depends(get_
         "correct_answer": current_question.correct_answer if current_question else None,
         "question_id": current_question.id if current_question else None,
     }
+
+@router.post("/{code}/leave")
+async def leave_game(code: str, req: dict, db: AsyncSession = Depends(get_db)):
+    player_id = req.get("player_id")
+    if not player_id:
+        return {"status": "ok"}
+    
+    result = await db.execute(select(Player).where(Player.id == player_id))
+    player = result.scalar_one_or_none()
+    if not player:
+        return {"status": "ok"}
+
+    await db.delete(player)
+    await db.commit()
+
+    await manager.broadcast(code.upper(), {
+        "event": "player_left",
+        "player_id": player_id,
+    })
+
+    return {"status": "ok"}
