@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from app.database import get_db
@@ -321,11 +321,17 @@ async def resume_game(code: str, player_id: str, db: AsyncSession = Depends(get_
     }
 
 @router.post("/{code}/leave")
-async def leave_game(code: str, req: dict, db: AsyncSession = Depends(get_db)):
-    player_id = req.get("player_id")
+async def leave_game(code: str, request: Request, db: AsyncSession = Depends(get_db)):
+    from fastapi import Request
+    try:
+        body = await request.json()
+        player_id = body.get("player_id")
+    except Exception:
+        return {"status": "ok"}
+
     if not player_id:
         return {"status": "ok"}
-    
+
     result = await db.execute(select(Player).where(Player.id == player_id))
     player = result.scalar_one_or_none()
     if not player:
