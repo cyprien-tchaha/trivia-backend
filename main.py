@@ -65,9 +65,6 @@ async def websocket_endpoint(websocket: WebSocket, code: str):
 
     except WebSocketDisconnect:
         manager.disconnect(websocket, code.upper())
-        await manager.broadcast(code.upper(), {
-            "event": "player_disconnected"
-        })
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
