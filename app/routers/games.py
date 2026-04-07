@@ -405,3 +405,12 @@ async def leave_game(code: str, request: Request, db: AsyncSession = Depends(get
                     })
 
     return {"status": "ok"}
+
+@router.get("/{code}/question-answers/{question_id}")
+async def get_question_answers(code: str, question_id: str, db: AsyncSession = Depends(get_db)):
+    from app.models import Answer
+    result = await db.execute(
+        select(Answer).where(Answer.question_id == question_id)
+    )
+    answers = result.scalars().all()
+    return {"count": len(answers)}
