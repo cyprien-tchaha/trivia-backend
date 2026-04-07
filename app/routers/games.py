@@ -272,3 +272,50 @@ async def get_player_answer(code: str, player_id: str, question_id: str, db: Asy
         "correct_answer": question.correct_answer if question else "",
         "score": player.score if player else 0,
     }
+
+@router.get("/{code}/resume/{player_id}")
+async def resume_game(code: str, player_id: str, db: AsyncSession = Depends(get_db)):
+    from app.models import Answer, Question
+    from sqlalchemy import and_
+
+    result = await db.execute(select(Game).where(Game.code == code.upper()))
+    game = result.scalar_one_or_none()
+    if not game:
+        raise HTTPException(status_code=404, detail="Game not found")
+
+    result = await db.execute(select(Player).where(Player.id == player_id))
+    player = result.scalar_one_or_none()
+    if not player:
+        raise HTTPException(status_code=404, detail="Player not found")
+
+    # Get current question
+    result = await db.execute(
+        select(Question)
+        .where(Question.game_id == game.id)
+        .where(Question.order_index == game.current_question_index)
+    )
+    current_question = result.scalar_one_or_none()
+
+    # Check if player already answered current question
+    answered = None
+    if current_question:
+        result = await db.execute(
+            select(Answer).where(
+                and_(
+                    Answer.player_id == player_id,
+                    Answer.question_id == current_question.id,
+                )
+            )
+        )
+        answered = result.scalar_one_or_none()
+
+    return {
+        "game_status": game.status,
+        "current_question_index": game.current_question_index,
+        "player_score": player.score,
+        "already_answered": answered is not None,
+        "answer": answered.answer if answered else None,
+        "correct": answered.correct if answered else None,
+        "correct_answer": current_question.correct_answer if current_question else None,
+        "question_id": current_question.id if current_question else None,
+    }
