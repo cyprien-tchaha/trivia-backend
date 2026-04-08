@@ -135,3 +135,29 @@ async def report_question(question_id: str, req: dict, db: AsyncSession = Depend
         print(f"REPORTED QUESTION: {question.id} | {question.text} | correct: {question.correct_answer}")
     
     return {"status": "reported"}
+
+@router.post("/{game_id}/commentary")
+async def get_commentary(game_id: str, req: dict, db: AsyncSession = Depends(get_db)):
+    from app.services.ai_service import generate_commentary
+
+    question_text = req.get("question_text", "")
+    correct_answer = req.get("correct_answer", "")
+    topics = req.get("topics", "")
+    correct_count = req.get("correct_count", 0)
+    total_count = req.get("total_count", 1)
+
+    if not question_text or not correct_answer:
+        raise HTTPException(status_code=400, detail="question_text and correct_answer are required")
+
+    try:
+        line = await generate_commentary(
+            question_text=question_text,
+            correct_answer=correct_answer,
+            topics=topics,
+            correct_count=correct_count,
+            total_count=total_count,
+        )
+        return {"commentary": line}
+    except Exception as e:
+        print(f"Commentary generation failed: {e}")
+        return {"commentary": ""}
