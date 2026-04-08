@@ -120,3 +120,18 @@ async def validate_topics_endpoint(req: dict):
         return result
     except Exception as e:
         return {"valid": True, "corrected": topics, "unknown": [], "found": []}
+    
+@router.post("/{question_id}/report")
+async def report_question(question_id: str, req: dict, db: AsyncSession = Depends(get_db)):
+    from app.models import Question
+    result = await db.execute(select(Question).where(Question.id == question_id))
+    question = result.scalar_one_or_none()
+    if not question:
+        raise HTTPException(status_code=404, detail="Question not found")
+    
+    # Mark question as reported
+    if not hasattr(question, 'reported'):
+        # Just log it for now — we'll add the column later
+        print(f"REPORTED QUESTION: {question.id} | {question.text} | correct: {question.correct_answer}")
+    
+    return {"status": "reported"}
