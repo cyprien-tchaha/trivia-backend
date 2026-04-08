@@ -275,3 +275,34 @@ Respond ONLY with a JSON object, no other text:
         "unknown": unknown,
         "found": corrected_list,
     }
+
+async def generate_commentary(
+    question_text: str,
+    correct_answer: str,
+    topics: str,
+    correct_count: int,
+    total_count: int,
+) -> str:
+    subject = topics.strip() if topics.strip() else "this show"
+
+    prompt = f"""You are the host of a live trivia game about {subject}. A round just ended.
+
+Question: {question_text}
+Correct answer: {correct_answer}
+Players who got it right: {correct_count} out of {total_count}
+
+Write ONE short, punchy commentary line reacting to the results. Rules:
+- Max 12 words
+- Slightly savage, like a sports commentator or a Reddit comment
+- Reference the show or topic if it makes the line funnier
+- React to the score — brutal if nobody got it, impressed if everyone did, spicy if it split the room
+- No emojis, no hashtags, no quotation marks
+- Return only the single line, nothing else"""
+
+    response = await client.messages.create(
+        model="claude-haiku-4-5-20251001",
+        max_tokens=60,
+        messages=[{"role": "user", "content": prompt}],
+    )
+
+    return response.content[0].text.strip()
