@@ -56,6 +56,7 @@ async def generate_questions(
     difficulty: int,
     count: int = 10,
     topics: str = "",
+    exclude_questions: list[str] = [],
 ) -> list[dict]:
     category_desc = CATEGORY_PROMPTS.get(category, "anime")
     difficulty_desc = DIFFICULTY_DESCRIPTIONS.get(difficulty, "medium difficulty")
@@ -67,19 +68,29 @@ async def generate_questions(
     else:
         subject = f"about {category_desc}"
 
+    # Build exclusion block
+    exclusion_block = ""
+    if exclude_questions:
+        exclusion_list = "\n".join(f"- {q}" for q in exclude_questions[:50])
+        exclusion_block = f"""
+PREVIOUSLY ASKED QUESTIONS — DO NOT REPEAT OR CLOSELY PARAPHRASE ANY OF THESE:
+{exclusion_list}
+
+You MUST generate entirely new questions that test different facts, characters, or events.
+"""
+
     all_verified = []
     attempts = 0
     max_attempts = 3
 
     while len(all_verified) < count and attempts < max_attempts:
         needed = count - len(all_verified)
-        # Request extra to account for verification rejections
         request_count = needed + max(3, needed // 2)
 
         prompt = f"""Generate {request_count} trivia questions {subject}.
 
 Difficulty level: {difficulty}/5 — {difficulty_desc}
-
+{exclusion_block}
 STRICT RULES — follow these exactly:
 - NEVER ask about episode numbers, episode titles, or episode counts
 - NEVER ask about directors, animators, or production staff unless they are extremely famous (e.g. Hayao Miyazaki)
@@ -120,7 +131,6 @@ Format:
 
         questions = json.loads(raw)
 
-        # Filter structurally valid questions
         valid = []
         existing_texts = {q["text"] for q in all_verified}
         for q in questions:
@@ -142,13 +152,11 @@ Format:
                 })
                 existing_texts.add(q["text"])
 
-        # Verify this batch
         verified_batch = await verify_questions(valid, topics or category_desc)
         all_verified.extend(verified_batch)
         attempts += 1
         print(f"Attempt {attempts}: {len(verified_batch)}/{len(valid)} passed, total: {len(all_verified)}/{count}")
 
-    # If after 3 attempts we still don't have enough, use fallback for the gap
     if len(all_verified) < count:
         print(f"Warning: only {len(all_verified)} verified questions, filling with fallback")
         fallback = _get_fallback_questions(category, difficulty)
