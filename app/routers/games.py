@@ -43,7 +43,6 @@ async def join_game(code: str, req: JoinGameRequest, db: AsyncSession = Depends(
         raise HTTPException(status_code=404, detail="Game not found")
     if game.status != "lobby":
         raise HTTPException(status_code=400, detail="Game already started")
-    # Check if player with same name already exists in this game
     existing_player_result = await db.execute(
         select(Player).where(
             Player.game_id == game.id,
@@ -149,7 +148,6 @@ async def submit_answer(code: str, req: dict, db: AsyncSession = Depends(get_db)
         )
     )
     if existing.scalar_one_or_none():
-        # Already answered — return their existing score silently
         return {"correct": False, "score": player.score, "correct_answer": question.correct_answer, "duplicate": True}
 
     # Record the answer
@@ -179,11 +177,12 @@ async def submit_answer(code: str, req: dict, db: AsyncSession = Depends(get_db)
         "score": player.score
     })
 
-    # Check if all players have answered this question
-    all_players_result = await db.execute(
+    # Check if all active players have answered
+    active_players_result = await db.execute(
         select(Player).where(Player.game_id == game.id)
     )
-    all_players = all_players_result.scalars().all()
+    active_players = active_players_result.scalars().all()
+    active_player_count = len(active_players)
 
     answered_result = await db.execute(
         select(Answer).where(
@@ -195,29 +194,22 @@ async def submit_answer(code: str, req: dict, db: AsyncSession = Depends(get_db)
     )
     answered_count = len(answered_result.scalars().all())
 
-    # Only count active players (those still in the game)
-    # Re-fetch current active players (excludes anyone who left)
-    active_players_result = await db.execute(
-        select(Player).where(Player.game_id == game.id)
-    )
-    active_players = active_players_result.scalars().all()
-    active_player_count = len(active_players)
-
-    # Count answers for this question
-    answered_result2 = await db.execute(
-        select(Answer).where(
-            and_(
-                Answer.game_id == game.id,
-                Answer.question_id == question.id,
+    if active_player_count > 0 and answered_count >= active_player_count:
+        # Count how many answered correctly
+        correct_result = await db.execute(
+            select(Answer).where(
+                and_(
+                    Answer.game_id == game.id,
+                    Answer.question_id == question.id,
+                    Answer.correct == True,
+                )
             )
         )
-    )
-    answered_count2 = len(answered_result2.scalars().all())
-
-    if active_player_count > 0 and answered_count2 >= active_player_count:
+        correct_count = len(correct_result.scalars().all())
         await manager.broadcast(code.upper(), {
             "event": "all_answered",
             "correct_answer": question.correct_answer,
+            "correct_count": correct_count,
         })
 
     return {"correct": correct, "score": player.score, "correct_answer": question.correct_answer}
@@ -228,7 +220,6 @@ async def set_question_index(code: str, index: int, db: AsyncSession = Depends(g
     game = result.scalar_one_or_none()
     if not game:
         raise HTTPException(status_code=404, detail="Game not found")
-    # Reset answer count for previous question
     if hasattr(manager, 'answer_counts'):
         old_key = f"{code.upper()}_q{game.current_question_index}"
         manager.answer_counts[old_key] = 0
@@ -242,24 +233,28 @@ async def reset_game(code: str, db: AsyncSession = Depends(get_db)):
     game = result.scalar_one_or_none()
     if not game:
         raise HTTPException(status_code=404, detail="Game not found")
-    
-    # Delete old questions
+
     from sqlalchemy import delete
+    from app.models import Answer
+
+    # Delete answers first (foreign key constraint), then questions
+    await db.execute(delete(Answer).where(Answer.game_id == game.id))
     await db.execute(delete(Question).where(Question.game_id == game.id))
-    
-    # Reset game state
-    game.status = "lobby"
+
+    # Set status to active (not lobby) so game flows correctly on replay
+    game.status = "active"
     game.current_question_index = 0
     await db.commit()
-    
+
     # Reset player scores
     result = await db.execute(select(Player).where(Player.game_id == game.id))
     players = result.scalars().all()
     for player in players:
         player.score = 0
     await db.commit()
-    
-    await manager.broadcast(code.upper(), {"event": "game_reset"})
+
+    # No broadcast here — frontend host sends game_reset via WebSocket
+    # to avoid double-firing the event
     return {"status": "reset"}
 
 @router.get("/{code}/player-answer/{player_id}/{question_id}")
@@ -274,16 +269,14 @@ async def get_player_answer(code: str, player_id: str, question_id: str, db: Asy
     answer = result.scalar_one_or_none()
     if not answer:
         return {"answered": False}
-    
-    # Get player score
+
     player_result = await db.execute(select(Player).where(Player.id == player_id))
     player = player_result.scalar_one_or_none()
-    
-    # Get correct answer
+
     from app.models import Question
     q_result = await db.execute(select(Question).where(Question.id == question_id))
     question = q_result.scalar_one_or_none()
-    
+
     return {
         "answered": True,
         "answer": answer.answer,
@@ -307,7 +300,6 @@ async def resume_game(code: str, player_id: str, db: AsyncSession = Depends(get_
     if not player:
         raise HTTPException(status_code=404, detail="Player not found")
 
-    # Get current question
     result = await db.execute(
         select(Question)
         .where(Question.game_id == game.id)
@@ -315,7 +307,6 @@ async def resume_game(code: str, player_id: str, db: AsyncSession = Depends(get_
     )
     current_question = result.scalar_one_or_none()
 
-    # Check if player already answered current question
     answered = None
     if current_question:
         result = await db.execute(
@@ -359,7 +350,6 @@ async def leave_game(code: str, request: Request, db: AsyncSession = Depends(get
 
     game_id = player.game_id
 
-    # Get game to find current question
     game_result = await db.execute(select(Game).where(Game.id == game_id))
     game = game_result.scalar_one_or_none()
 
@@ -379,7 +369,6 @@ async def leave_game(code: str, request: Request, db: AsyncSession = Depends(get
         active_players = active_result.scalars().all()
 
         if len(active_players) > 0:
-            # Get current question
             q_result = await db.execute(
                 select(Question)
                 .where(Question.game_id == game_id)
@@ -399,9 +388,20 @@ async def leave_game(code: str, request: Request, db: AsyncSession = Depends(get
                 answered_count = len(answered_result.scalars().all())
 
                 if answered_count >= len(active_players):
+                    correct_result = await db.execute(
+                        select(Answer).where(
+                            and_(
+                                Answer.game_id == game_id,
+                                Answer.question_id == current_question.id,
+                                Answer.correct == True,
+                            )
+                        )
+                    )
+                    correct_count = len(correct_result.scalars().all())
                     await manager.broadcast(code.upper(), {
                         "event": "all_answered",
                         "correct_answer": current_question.correct_answer,
+                        "correct_count": correct_count,
                     })
 
     return {"status": "ok"}
