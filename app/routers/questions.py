@@ -11,7 +11,30 @@ async def create_ai_questions(game_id: str, category: str, difficulty: int, coun
     from app.database import AsyncSessionLocal
     async with AsyncSessionLocal() as db:
         try:
-            questions = await generate_questions(category, difficulty, count, topics)
+            # Fetch recent questions for same topic+difficulty to avoid repeats
+            from sqlalchemy import select, desc
+            from app.models import Question as QuestionModel, Game as GameModel
+
+            # Find the 50 most recent question texts for this topic+difficulty
+            recent_stmt = (
+                select(QuestionModel.text)
+                .join(GameModel, QuestionModel.game_id == GameModel.id)
+                .where(
+                    GameModel.difficulty == difficulty,
+                    GameModel.topics == topics,
+                    GameModel.category == category,
+                    QuestionModel.game_id != game_id,
+                )
+                .order_by(desc(QuestionModel.id))
+                .limit(50)
+            )
+            recent_result = await db.execute(recent_stmt)
+            exclude_questions = [row[0] for row in recent_result.fetchall()]
+
+            if exclude_questions:
+                print(f"Excluding {len(exclude_questions)} previously asked questions")
+
+            questions = await generate_questions(category, difficulty, count, topics, exclude_questions)
             for i, q in enumerate(questions):
                 question = Question(
                     game_id=game_id,
