@@ -13,7 +13,16 @@ if DATABASE_URL.startswith("postgresql://"):
 if DATABASE_URL.startswith("postgres://"):
     DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql+asyncpg://", 1)
 
-engine = create_async_engine(DATABASE_URL, echo=True)
+engine = create_async_engine(
+    DATABASE_URL,
+    echo=False,          # was True — logging every query tanks performance under load
+    pool_size=10,        # number of persistent connections in the pool
+    max_overflow=20,     # extra connections allowed beyond pool_size under burst load
+    pool_timeout=30,     # seconds to wait for a connection before raising an error
+    pool_recycle=1800,   # recycle connections every 30 min to avoid Railway's idle timeout
+    pool_pre_ping=True,  # test connections before using them to avoid stale connection errors
+)
+
 AsyncSessionLocal = sessionmaker(
     engine, class_=AsyncSession, expire_on_commit=False
 )
