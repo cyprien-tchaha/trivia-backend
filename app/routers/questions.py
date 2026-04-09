@@ -162,12 +162,25 @@ async def report_question(question_id: str, req: dict, db: AsyncSession = Depend
 @router.post("/{game_id}/commentary")
 async def get_commentary(game_id: str, req: dict, db: AsyncSession = Depends(get_db)):
     from app.services.ai_service import generate_commentary
+    from sqlalchemy import select as sa_select
 
     question_text = req.get("question_text", "")
-    correct_answer = req.get("correct_answer", "")
     topics = req.get("topics", "")
     correct_count = req.get("correct_count", 0)
     total_count = req.get("total_count", 1)
+
+    # correct_answer may be passed by client or we look it up from question_text
+    correct_answer = req.get("correct_answer", "")
+    if not correct_answer and question_text:
+        result = await db.execute(
+            sa_select(Question).where(
+                Question.game_id == game_id,
+                Question.text == question_text,
+            )
+        )
+        q = result.scalar_one_or_none()
+        if q:
+            correct_answer = q.correct_answer
 
     if not question_text or not correct_answer:
         raise HTTPException(status_code=400, detail="question_text and correct_answer are required")
