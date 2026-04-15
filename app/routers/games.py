@@ -379,16 +379,21 @@ async def leave_game(code: str, request: Request, db: AsyncSession = Depends(get
                         await delete_db.delete(p)
                         await delete_db.commit()
                         print(f"[LEAVE] player={player_id} deleted after grace window")
-                        if game:
+                        # Fetch FRESH game state — stale game object has wrong current_question_index
+                        fresh_game_result = await delete_db.execute(
+                            select(Game).where(Game.id == game_id)
+                        )
+                        fresh_game = fresh_game_result.scalar_one_or_none()
+                        if fresh_game and fresh_game.status == "active":
                             active_result = await delete_db.execute(
                                 select(Player).where(Player.game_id == game_id)
                             )
                             active_players = active_result.scalars().all()
-                            if len(active_players) > 0 and game.status == "active":
+                            if len(active_players) > 0:
                                 q_result = await delete_db.execute(
                                     select(Question)
                                     .where(Question.game_id == game_id)
-                                    .where(Question.order_index == game.current_question_index)
+                                    .where(Question.order_index == fresh_game.current_question_index)
                                 )
                                 current_q = q_result.scalar_one_or_none()
                                 if current_q:
@@ -416,6 +421,7 @@ async def leave_game(code: str, request: Request, db: AsyncSession = Depends(get
                                             "event": "all_answered",
                                             "correct_answer": current_q.correct_answer,
                                             "correct_count": correct_count,
+                                            "question_id": current_q.id,
                                         })
                 except Exception as e:
                     print(f"[LEAVE] delayed delete error: {e}")
