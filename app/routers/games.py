@@ -186,9 +186,9 @@ async def submit_answer(code: str, req: dict, db: AsyncSession = Depends(get_db)
     active_players_result = await db.execute(
         select(Player).where(Player.game_id == game.id)
     )
+
     all_players = active_players_result.scalars().all()
-    active_players = [p for p in all_players if not manager.is_in_grace_window(p.id)]
-    active_player_count = len(active_players)
+    active_player_count = len(all_players)
 
     answered_result = await db.execute(
         select(Answer).where(
@@ -198,12 +198,10 @@ async def submit_answer(code: str, req: dict, db: AsyncSession = Depends(get_db)
             )
         )
     )
-    # Only count answers from active players — exclude grace window players
     all_answers = answered_result.scalars().all()
-    active_player_ids = {p.id for p in active_players}
-    answered_count = len([a for a in all_answers if a.player_id in active_player_ids])
+    answered_count = len(all_answers)
 
-    print(f"[ANSWER] player={player.name} total={len(all_players)} active={active_player_count} grace={len(all_players)-active_player_count} answered={answered_count}")
+    print(f"[ANSWER] player={player.name} total={len(all_players)} answered={answered_count}")
 
     if active_player_count > 0 and answered_count >= active_player_count:
         correct_result = await db.execute(
