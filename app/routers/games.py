@@ -184,7 +184,6 @@ async def submit_answer(code: str, req: dict, db: AsyncSession = Depends(get_db)
     })
 
     # Check if all active players have answered
-    # Exclude players in grace window — they disconnected and shouldn't block the game
     active_players_result = await db.execute(
         select(Player).where(Player.game_id == game.id)
     )
@@ -202,6 +201,8 @@ async def submit_answer(code: str, req: dict, db: AsyncSession = Depends(get_db)
     )
     answered_count = len(answered_result.scalars().all())
 
+    print(f"[ANSWER] player={player.name} total={len(all_players)} active={active_player_count} grace={len(all_players)-active_player_count} answered={answered_count}")
+
     if active_player_count > 0 and answered_count >= active_player_count:
         correct_result = await db.execute(
             select(Answer).where(
@@ -213,6 +214,7 @@ async def submit_answer(code: str, req: dict, db: AsyncSession = Depends(get_db)
             )
         )
         correct_count = len(correct_result.scalars().all())
+        print(f"[ANSWER] all_answered firing — correct_count={correct_count}")
         await manager.broadcast(code.upper(), {
             "event": "all_answered",
             "correct_answer": question.correct_answer,
@@ -303,6 +305,7 @@ async def resume_game(code: str, player_id: str, db: AsyncSession = Depends(get_
         raise HTTPException(status_code=404, detail="Player not found")
 
     manager.remove_from_grace_window(player_id)
+    print(f"[RESUME] player={player.name} removed from grace window")
 
     result = await db.execute(
         select(Question)
@@ -357,6 +360,7 @@ async def leave_game(code: str, request: Request, db: AsyncSession = Depends(get
     game = game_result.scalar_one_or_none()
 
     manager.add_to_grace_window(player_id, code.upper(), seconds=30)
+    print(f"[LEAVE] player={player.name} id={player_id} added to grace window")
 
     await manager.broadcast(code.upper(), {
         "event": "player_left",
@@ -366,6 +370,7 @@ async def leave_game(code: str, request: Request, db: AsyncSession = Depends(get
     async def delayed_delete():
         await asyncio.sleep(30)
         if manager.grace_window_expired(player_id):
+            print(f"[LEAVE] grace window expired for player={player_id}, deleting")
             from app.database import AsyncSessionLocal
             async with AsyncSessionLocal() as delete_db:
                 try:
@@ -413,7 +418,9 @@ async def leave_game(code: str, request: Request, db: AsyncSession = Depends(get
                                             "correct_count": correct_count,
                                         })
                 except Exception as e:
-                    print(f"Delayed delete error: {e}")
+                    print(f"[LEAVE] delayed delete error: {e}")
+        else:
+            print(f"[LEAVE] player={player_id} reconnected within grace window")
 
     asyncio.create_task(delayed_delete())
 
