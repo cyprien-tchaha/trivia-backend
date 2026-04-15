@@ -5,7 +5,7 @@ from app.database import get_db
 from app.models import Game, Player, Question
 from app.schemas import CreateGameRequest, JoinGameRequest
 from app.websocket.manager import manager
-import random, string
+import random, string, asyncio
 
 router = APIRouter()
 
@@ -41,8 +41,10 @@ async def join_game(code: str, req: JoinGameRequest, db: AsyncSession = Depends(
     game = result.scalar_one_or_none()
     if not game:
         raise HTTPException(status_code=404, detail="Game not found")
-    if game.status != "lobby":
+    if game.status not in ("lobby", "active"):
         raise HTTPException(status_code=400, detail="Game already started")
+
+    # Check if player with same name already exists — could be a reconnect
     existing_player_result = await db.execute(
         select(Player).where(
             Player.game_id == game.id,
@@ -51,7 +53,17 @@ async def join_game(code: str, req: JoinGameRequest, db: AsyncSession = Depends(
     )
     existing = existing_player_result.scalar_one_or_none()
     if existing:
-        return {"player_id": existing.id, "game_id": game.id, "code": code.upper()}
+        # Remove from grace window — they're back
+        manager.remove_from_grace_window(existing.id)
+        await manager.broadcast(code.upper(), {
+            "event": "player_rejoined",
+            "player": {"id": existing.id, "name": existing.name, "score": existing.score}
+        })
+        return {"player_id": existing.id, "game_id": game.id, "code": code.upper(), "rejoined": True}
+
+    # Only block new joins if game is active (reconnects above are always allowed)
+    if game.status == "active":
+        raise HTTPException(status_code=400, detail="Game already started")
 
     player = Player(game_id=game.id, name=req.player_name)
     db.add(player)
@@ -71,7 +83,16 @@ async def get_players(code: str, db: AsyncSession = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Game not found")
     result = await db.execute(select(Player).where(Player.game_id == game.id))
     players = result.scalars().all()
-    return [{"id": p.id, "name": p.name, "score": p.score} for p in players]
+    # Filter out players whose grace window has expired — they truly left
+    active_players = []
+    for p in players:
+        if manager.grace_window_expired(p.id):
+            # Grace window just expired — delete them now
+            await db.delete(p)
+        else:
+            active_players.append(p)
+    await db.commit()
+    return [{"id": p.id, "name": p.name, "score": p.score} for p in active_players]
 
 @router.get("/{code}")
 async def get_game(code: str, db: AsyncSession = Depends(get_db)):
@@ -88,6 +109,7 @@ async def get_game(code: str, db: AsyncSession = Depends(get_db)):
         "difficulty": game.difficulty,
         "question_count": game.question_count,
         "topics": game.topics,
+        "current_question_index": game.current_question_index,
     }
 
 @router.post("/{code}/start")
@@ -138,7 +160,6 @@ async def submit_answer(code: str, req: dict, db: AsyncSession = Depends(get_db)
     if not question:
         raise HTTPException(status_code=404, detail="Question not found")
 
-    # Check if player already answered this question
     existing = await db.execute(
         select(Answer).where(
             and_(
@@ -150,7 +171,6 @@ async def submit_answer(code: str, req: dict, db: AsyncSession = Depends(get_db)
     if existing.scalar_one_or_none():
         return {"correct": False, "score": player.score, "correct_answer": question.correct_answer, "duplicate": True}
 
-    # Record the answer
     correct = req.get("answer") == question.correct_answer
     answer_record = Answer(
         game_id=game.id,
@@ -181,7 +201,9 @@ async def submit_answer(code: str, req: dict, db: AsyncSession = Depends(get_db)
     active_players_result = await db.execute(
         select(Player).where(Player.game_id == game.id)
     )
-    active_players = active_players_result.scalars().all()
+    all_players = active_players_result.scalars().all()
+    # Exclude players in grace window — they disconnected
+    active_players = [p for p in all_players if not manager.is_in_grace_window(p.id)]
     active_player_count = len(active_players)
 
     answered_result = await db.execute(
@@ -195,7 +217,6 @@ async def submit_answer(code: str, req: dict, db: AsyncSession = Depends(get_db)
     answered_count = len(answered_result.scalars().all())
 
     if active_player_count > 0 and answered_count >= active_player_count:
-        # Count how many answered correctly
         correct_result = await db.execute(
             select(Answer).where(
                 and_(
@@ -237,24 +258,19 @@ async def reset_game(code: str, db: AsyncSession = Depends(get_db)):
     from sqlalchemy import delete
     from app.models import Answer
 
-    # Delete answers first (foreign key constraint), then questions
     await db.execute(delete(Answer).where(Answer.game_id == game.id))
     await db.execute(delete(Question).where(Question.game_id == game.id))
 
-    # Set status to active (not lobby) so game flows correctly on replay
     game.status = "active"
     game.current_question_index = 0
     await db.commit()
 
-    # Reset player scores
     result = await db.execute(select(Player).where(Player.game_id == game.id))
     players = result.scalars().all()
     for player in players:
         player.score = 0
     await db.commit()
 
-    # No broadcast here — frontend host sends game_reset via WebSocket
-    # to avoid double-firing the event
     return {"status": "reset"}
 
 @router.get("/{code}/player-answer/{player_id}/{question_id}")
@@ -299,6 +315,9 @@ async def resume_game(code: str, player_id: str, db: AsyncSession = Depends(get_
     player = result.scalar_one_or_none()
     if not player:
         raise HTTPException(status_code=404, detail="Player not found")
+
+    # Remove from grace window — they successfully resumed
+    manager.remove_from_grace_window(player_id)
 
     result = await db.execute(
         select(Question)
@@ -349,60 +368,75 @@ async def leave_game(code: str, request: Request, db: AsyncSession = Depends(get
         return {"status": "ok"}
 
     game_id = player.game_id
-
     game_result = await db.execute(select(Game).where(Game.id == game_id))
     game = game_result.scalar_one_or_none()
 
-    await db.delete(player)
-    await db.commit()
+    # Add to grace window instead of immediately deleting
+    manager.add_to_grace_window(player_id, code.upper(), seconds=30)
 
+    # Broadcast that player disconnected (not fully left yet)
     await manager.broadcast(code.upper(), {
         "event": "player_left",
         "player_id": player_id,
     })
 
-    # After removing player, check if remaining players have all answered
-    if game:
-        active_result = await db.execute(
-            select(Player).where(Player.game_id == game_id)
-        )
-        active_players = active_result.scalars().all()
-
-        if len(active_players) > 0:
-            q_result = await db.execute(
-                select(Question)
-                .where(Question.game_id == game_id)
-                .where(Question.order_index == game.current_question_index)
-            )
-            current_question = q_result.scalar_one_or_none()
-
-            if current_question:
-                answered_result = await db.execute(
-                    select(Answer).where(
-                        and_(
-                            Answer.game_id == game_id,
-                            Answer.question_id == current_question.id,
-                        )
-                    )
-                )
-                answered_count = len(answered_result.scalars().all())
-
-                if answered_count >= len(active_players):
-                    correct_result = await db.execute(
-                        select(Answer).where(
-                            and_(
-                                Answer.game_id == game_id,
-                                Answer.question_id == current_question.id,
-                                Answer.correct == True,
+    # Schedule actual deletion after 30 seconds if they don't reconnect
+    async def delayed_delete():
+        await asyncio.sleep(30)
+        if manager.grace_window_expired(player_id):
+            # Grace window expired — they didn't come back, delete for real
+            from app.database import AsyncSessionLocal
+            async with AsyncSessionLocal() as delete_db:
+                try:
+                    p_result = await delete_db.execute(select(Player).where(Player.id == player_id))
+                    p = p_result.scalar_one_or_none()
+                    if p:
+                        await delete_db.delete(p)
+                        await delete_db.commit()
+                        # Notify remaining players of final removal
+                        if game:
+                            active_result = await delete_db.execute(
+                                select(Player).where(Player.game_id == game_id)
                             )
-                        )
-                    )
-                    correct_count = len(correct_result.scalars().all())
-                    await manager.broadcast(code.upper(), {
-                        "event": "all_answered",
-                        "correct_answer": current_question.correct_answer,
-                        "correct_count": correct_count,
-                    })
+                            active_players = active_result.scalars().all()
+                            if len(active_players) > 0 and game.status == "active":
+                                # Check if remaining players all answered current question
+                                q_result = await delete_db.execute(
+                                    select(Question)
+                                    .where(Question.game_id == game_id)
+                                    .where(Question.order_index == game.current_question_index)
+                                )
+                                current_q = q_result.scalar_one_or_none()
+                                if current_q:
+                                    ans_result = await delete_db.execute(
+                                        select(Answer).where(
+                                            and_(
+                                                Answer.game_id == game_id,
+                                                Answer.question_id == current_q.id,
+                                            )
+                                        )
+                                    )
+                                    answered_count = len(ans_result.scalars().all())
+                                    if answered_count >= len(active_players):
+                                        correct_result = await delete_db.execute(
+                                            select(Answer).where(
+                                                and_(
+                                                    Answer.game_id == game_id,
+                                                    Answer.question_id == current_q.id,
+                                                    Answer.correct == True,
+                                                )
+                                            )
+                                        )
+                                        correct_count = len(correct_result.scalars().all())
+                                        await manager.broadcast(code.upper(), {
+                                            "event": "all_answered",
+                                            "correct_answer": current_q.correct_answer,
+                                            "correct_count": correct_count,
+                                        })
+                except Exception as e:
+                    print(f"Delayed delete error: {e}")
+
+    asyncio.create_task(delayed_delete())
 
     return {"status": "ok"}
 
@@ -414,3 +448,29 @@ async def get_question_answers(code: str, question_id: str, db: AsyncSession = D
     )
     answers = result.scalars().all()
     return {"count": len(answers)}
+
+@router.get("/{code}/admin")
+async def admin_game_status(code: str, db: AsyncSession = Depends(get_db)):
+    """Health check endpoint for monitoring during beta."""
+    result = await db.execute(select(Game).where(Game.code == code.upper()))
+    game = result.scalar_one_or_none()
+    if not game:
+        raise HTTPException(status_code=404, detail="Game not found")
+
+    result = await db.execute(select(Player).where(Player.game_id == game.id))
+    players = result.scalars().all()
+
+    ws_connections = len(manager.rooms.get(code.upper(), []))
+    grace_players = [pid for pid in manager.grace_window if manager.is_in_grace_window(pid)]
+
+    return {
+        "game": {
+            "code": game.code,
+            "status": game.status,
+            "current_question": game.current_question_index,
+            "question_count": game.question_count,
+        },
+        "players": [{"id": p.id, "name": p.name, "score": p.score} for p in players],
+        "websocket_connections": ws_connections,
+        "players_in_grace_window": len(grace_players),
+    }
