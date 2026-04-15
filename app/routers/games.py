@@ -1,8 +1,8 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select
+from sqlalchemy import select, delete
 from app.database import get_db
-from app.models import Game, Player, Question
+from app.models import Game, Player, Question, Answer
 from app.schemas import CreateGameRequest, JoinGameRequest
 from app.websocket.manager import manager
 import random, string, asyncio
@@ -128,7 +128,6 @@ async def finish_game(code: str, db: AsyncSession = Depends(get_db)):
 
 @router.post("/{code}/answer")
 async def submit_answer(code: str, req: dict, db: AsyncSession = Depends(get_db)):
-    from app.models import Question, Answer
     from sqlalchemy import and_
 
     result = await db.execute(select(Game).where(Game.code == code.upper()))
@@ -183,7 +182,6 @@ async def submit_answer(code: str, req: dict, db: AsyncSession = Depends(get_db)
         "score": player.score
     })
 
-    # Check if all active players have answered
     active_players_result = await db.execute(
         select(Player).where(Player.game_id == game.id)
     )
@@ -243,9 +241,6 @@ async def reset_game(code: str, db: AsyncSession = Depends(get_db)):
     if not game:
         raise HTTPException(status_code=404, detail="Game not found")
 
-    from sqlalchemy import delete
-    from app.models import Answer
-
     await db.execute(delete(Answer).where(Answer.game_id == game.id))
     await db.execute(delete(Question).where(Question.game_id == game.id))
 
@@ -263,7 +258,6 @@ async def reset_game(code: str, db: AsyncSession = Depends(get_db)):
 
 @router.get("/{code}/player-answer/{player_id}/{question_id}")
 async def get_player_answer(code: str, player_id: str, question_id: str, db: AsyncSession = Depends(get_db)):
-    from app.models import Answer
     result = await db.execute(
         select(Answer).where(
             Answer.player_id == player_id,
@@ -277,7 +271,6 @@ async def get_player_answer(code: str, player_id: str, question_id: str, db: Asy
     player_result = await db.execute(select(Player).where(Player.id == player_id))
     player = player_result.scalar_one_or_none()
 
-    from app.models import Question
     q_result = await db.execute(select(Question).where(Question.id == question_id))
     question = q_result.scalar_one_or_none()
 
@@ -291,7 +284,6 @@ async def get_player_answer(code: str, player_id: str, question_id: str, db: Asy
 
 @router.get("/{code}/resume/{player_id}")
 async def resume_game(code: str, player_id: str, db: AsyncSession = Depends(get_db)):
-    from app.models import Answer, Question
     from sqlalchemy import and_
 
     result = await db.execute(select(Game).where(Game.code == code.upper()))
@@ -339,7 +331,6 @@ async def resume_game(code: str, player_id: str, db: AsyncSession = Depends(get_
 
 @router.post("/{code}/leave")
 async def leave_game(code: str, request: Request, db: AsyncSession = Depends(get_db)):
-    from app.models import Answer, Question
     from sqlalchemy import and_
     try:
         body = await request.json()
@@ -353,6 +344,11 @@ async def leave_game(code: str, request: Request, db: AsyncSession = Depends(get
     result = await db.execute(select(Player).where(Player.id == player_id))
     player = result.scalar_one_or_none()
     if not player:
+        return {"status": "ok"}
+
+    # Ignore duplicate leave calls — already in grace window
+    if manager.is_in_grace_window(player_id):
+        print(f"[LEAVE] player={player.name} already in grace window, ignoring duplicate")
         return {"status": "ok"}
 
     game_id = player.game_id
@@ -377,8 +373,11 @@ async def leave_game(code: str, request: Request, db: AsyncSession = Depends(get
                     p_result = await delete_db.execute(select(Player).where(Player.id == player_id))
                     p = p_result.scalar_one_or_none()
                     if p:
+                        # Delete answers first to avoid foreign key violation
+                        await delete_db.execute(delete(Answer).where(Answer.player_id == player_id))
                         await delete_db.delete(p)
                         await delete_db.commit()
+                        print(f"[LEAVE] player={player_id} deleted after grace window")
                         if game:
                             active_result = await delete_db.execute(
                                 select(Player).where(Player.game_id == game_id)
@@ -428,7 +427,6 @@ async def leave_game(code: str, request: Request, db: AsyncSession = Depends(get
 
 @router.get("/{code}/question-answers/{question_id}")
 async def get_question_answers(code: str, question_id: str, db: AsyncSession = Depends(get_db)):
-    from app.models import Answer
     result = await db.execute(
         select(Answer).where(Answer.question_id == question_id)
     )
