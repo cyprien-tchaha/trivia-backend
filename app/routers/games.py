@@ -179,7 +179,8 @@ async def submit_answer(code: str, req: dict, db: AsyncSession = Depends(get_db)
         "player_name": player.name,
         "correct": correct,
         "correct_answer": question.correct_answer,
-        "score": player.score
+        "score": player.score,
+        "question_id": question.id,
     })
 
     active_players_result = await db.execute(
