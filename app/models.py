@@ -21,10 +21,11 @@ class Game(Base):
 
 class Player(Base):
     __tablename__ = "players"
-    id      = Column(String, primary_key=True, default=gen_uuid)
-    game_id = Column(String, ForeignKey("games.id"), nullable=False)
-    name    = Column(String, nullable=False)
-    score   = Column(Integer, default=0)
+    id              = Column(String, primary_key=True, default=gen_uuid)
+    game_id         = Column(String, ForeignKey("games.id"), nullable=False)
+    name            = Column(String, nullable=False)
+    score           = Column(Integer, default=0)
+    disconnected_at = Column(DateTime(timezone=True), nullable=True, default=None)
 
 class Question(Base):
     __tablename__ = "questions"
