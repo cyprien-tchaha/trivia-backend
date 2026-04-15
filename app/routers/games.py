@@ -41,8 +41,6 @@ async def join_game(code: str, req: JoinGameRequest, db: AsyncSession = Depends(
     game = result.scalar_one_or_none()
     if not game:
         raise HTTPException(status_code=404, detail="Game not found")
-    if game.status not in ("lobby", "active"):
-        raise HTTPException(status_code=400, detail="Game already started")
 
     # Check if player with same name already exists — could be a reconnect
     existing_player_result = await db.execute(
@@ -61,8 +59,8 @@ async def join_game(code: str, req: JoinGameRequest, db: AsyncSession = Depends(
         })
         return {"player_id": existing.id, "game_id": game.id, "code": code.upper(), "rejoined": True}
 
-    # Only block new joins if game is active (reconnects above are always allowed)
-    if game.status == "active":
+    # New player — only allow in lobby
+    if game.status != "lobby":
         raise HTTPException(status_code=400, detail="Game already started")
 
     player = Player(game_id=game.id, name=req.player_name)
@@ -87,7 +85,6 @@ async def get_players(code: str, db: AsyncSession = Depends(get_db)):
     active_players = []
     for p in players:
         if manager.grace_window_expired(p.id):
-            # Grace window just expired — delete them now
             await db.delete(p)
         else:
             active_players.append(p)
@@ -202,7 +199,6 @@ async def submit_answer(code: str, req: dict, db: AsyncSession = Depends(get_db)
         select(Player).where(Player.game_id == game.id)
     )
     all_players = active_players_result.scalars().all()
-    # Exclude players in grace window — they disconnected
     active_players = [p for p in all_players if not manager.is_in_grace_window(p.id)]
     active_player_count = len(active_players)
 
@@ -384,7 +380,6 @@ async def leave_game(code: str, request: Request, db: AsyncSession = Depends(get
     async def delayed_delete():
         await asyncio.sleep(30)
         if manager.grace_window_expired(player_id):
-            # Grace window expired — they didn't come back, delete for real
             from app.database import AsyncSessionLocal
             async with AsyncSessionLocal() as delete_db:
                 try:
@@ -393,14 +388,12 @@ async def leave_game(code: str, request: Request, db: AsyncSession = Depends(get
                     if p:
                         await delete_db.delete(p)
                         await delete_db.commit()
-                        # Notify remaining players of final removal
                         if game:
                             active_result = await delete_db.execute(
                                 select(Player).where(Player.game_id == game_id)
                             )
                             active_players = active_result.scalars().all()
                             if len(active_players) > 0 and game.status == "active":
-                                # Check if remaining players all answered current question
                                 q_result = await delete_db.execute(
                                     select(Question)
                                     .where(Question.game_id == game_id)
