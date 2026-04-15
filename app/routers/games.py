@@ -363,6 +363,37 @@ async def leave_game(code: str, request: Request, db: AsyncSession = Depends(get
     manager.add_to_grace_window(player_id, code.upper(), seconds=30)
     print(f"[LEAVE] player={player.name} id={player_id} added to grace window")
 
+    # Immediately void their answer for the current question — prevents cheating on refresh
+    if game:
+        from sqlalchemy import and_
+        current_q_result = await db.execute(
+            select(Question)
+            .where(Question.game_id == game_id)
+            .where(Question.order_index == game.current_question_index)
+        )
+        current_q = current_q_result.scalar_one_or_none()
+        if current_q:
+            # Only void if they haven't already answered
+            existing_ans = await db.execute(
+                select(Answer).where(
+                    and_(
+                        Answer.player_id == player_id,
+                        Answer.question_id == current_q.id,
+                    )
+                )
+            )
+            if not existing_ans.scalar_one_or_none():
+                void_answer = Answer(
+                    game_id=game_id,
+                    player_id=player_id,
+                    question_id=current_q.id,
+                    answer="__left__",
+                    correct=False,
+                )
+                db.add(void_answer)
+                await db.commit()
+                print(f"[LEAVE] voided answer for player={player.name} on question={current_q.id[:8]}")
+
     await manager.broadcast(code.upper(), {
         "event": "player_left",
         "player_id": player_id,
