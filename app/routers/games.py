@@ -198,7 +198,10 @@ async def submit_answer(code: str, req: dict, db: AsyncSession = Depends(get_db)
             )
         )
     )
-    answered_count = len(answered_result.scalars().all())
+    # Only count answers from active players — exclude grace window players
+    all_answers = answered_result.scalars().all()
+    active_player_ids = {p.id for p in active_players}
+    answered_count = len([a for a in all_answers if a.player_id in active_player_ids])
 
     print(f"[ANSWER] player={player.name} total={len(all_players)} active={active_player_count} grace={len(all_players)-active_player_count} answered={answered_count}")
 
