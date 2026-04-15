@@ -218,6 +218,7 @@ async def submit_answer(code: str, req: dict, db: AsyncSession = Depends(get_db)
             "event": "all_answered",
             "correct_answer": question.correct_answer,
             "correct_count": correct_count,
+            "question_id": question.id,
         })
 
     return {"correct": correct, "score": player.score, "correct_answer": question.correct_answer}
