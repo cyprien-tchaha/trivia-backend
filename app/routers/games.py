@@ -398,5 +398,4 @@ async def admin_game_status(code: str, db: AsyncSession = Depends(get_db)):
         },
         "players": [{"id": p.id, "name": p.name, "score": p.score} for p in players],
         "websocket_connections": ws_connections,
-        "players_in_grace_window": 0,
     }
