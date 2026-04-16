@@ -230,6 +230,7 @@ async def set_question_index(code: str, index: int, db: AsyncSession = Depends(g
     if hasattr(manager, 'answer_counts'):
         old_key = f"{code.upper()}_q{game.current_question_index}"
         manager.answer_counts[old_key] = 0
+    print(f"[ADVANCE] {code.upper()} {game.current_question_index} -> {index}")
     game.current_question_index = index
     await db.commit()
     return {"status": "ok", "current_question_index": index}
@@ -314,6 +315,15 @@ async def resume_game(code: str, player_id: str, db: AsyncSession = Depends(get_
             )
         )
         answered = result.scalar_one_or_none()
+
+    print(
+        f"[RESUME] player={player.name} pid={player_id[:8]} "
+        f"game_idx={game.current_question_index} "
+        f"q_exists={current_question is not None} "
+        f"q_id={current_question.id[:8] if current_question else None} "
+        f"already_answered={answered is not None} "
+        f"score={player.score}"
+    )
 
     return {
         "game_status": game.status,

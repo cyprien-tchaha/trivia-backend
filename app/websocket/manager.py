@@ -15,6 +15,7 @@ class ConnectionManager:
         if game_code not in self.rooms:
             self.rooms[game_code] = []
         self.rooms[game_code].append(websocket)
+        print(f"[WS-CONNECT] {game_code} room_size={len(self.rooms[game_code])}")
 
     def disconnect(self, websocket: WebSocket, game_code: str):
         if game_code in self.rooms:
@@ -22,6 +23,7 @@ class ConnectionManager:
                 self.rooms[game_code].remove(websocket)
             except ValueError:
                 pass
+            print(f"[WS-DISCONNECT] {game_code} room_size={len(self.rooms[game_code])}")
 
     def add_to_grace_window(self, player_id: str, game_code: str, seconds: int = 30):
         """Mark a player as disconnected but give them time to reconnect."""

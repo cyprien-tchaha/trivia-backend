@@ -46,6 +46,8 @@ async def websocket_endpoint(websocket: WebSocket, code: str):
                     "answer": data.get("answer")
                 })
             elif event == "next_question":
+                room = manager.rooms.get(code.upper(), [])
+                print(f"[WS-BCAST] next_question idx={data.get('question_index')} room_size={len(room)}")
                 await manager.broadcast(code.upper(), {
                     "event": "next_question",
                     "question_index": data.get("question_index")
