@@ -328,7 +328,6 @@ async def resume_game(code: str, player_id: str, db: AsyncSession = Depends(get_
 
 @router.post("/{code}/leave")
 async def leave_game(code: str, request: Request, db: AsyncSession = Depends(get_db)):
-    from sqlalchemy import and_
     try:
         body = await request.json()
         player_id = body.get("player_id")
@@ -343,74 +342,15 @@ async def leave_game(code: str, request: Request, db: AsyncSession = Depends(get
     if not player:
         return {"status": "ok"}
 
-    game_id = player.game_id
-    game_result = await db.execute(select(Game).where(Game.id == game_id))
-    game = game_result.scalar_one_or_none()
-
     print(f"[LEAVE] player={player.name} id={player_id}")
 
-    # Void their answer for the current question — prevents cheating on refresh
-    if game:
-        current_q_result = await db.execute(
-            select(Question)
-            .where(Question.game_id == game_id)
-            .where(Question.order_index == game.current_question_index)
-        )
-        current_q = current_q_result.scalar_one_or_none()
-        if current_q:
-            existing_ans = await db.execute(
-                select(Answer).where(
-                    and_(
-                        Answer.player_id == player_id,
-                        Answer.question_id == current_q.id,
-                    )
-                )
-            )
-            if not existing_ans.scalar_one_or_none():
-                void_answer = Answer(
-                    game_id=game_id,
-                    player_id=player_id,
-                    question_id=current_q.id,
-                    answer="__left__",
-                    correct=False,
-                )
-                db.add(void_answer)
-                await db.commit()
-                print(f"[LEAVE] voided answer for player={player.name}")
-
-                # Check if all players have now answered after the void
-                all_players_result = await db.execute(
-                    select(Player).where(Player.game_id == game_id)
-                )
-                all_players = all_players_result.scalars().all()
-                answered_result = await db.execute(
-                    select(Answer).where(
-                        and_(
-                            Answer.game_id == game_id,
-                            Answer.question_id == current_q.id,
-                        )
-                    )
-                )
-                answered_count = len(answered_result.scalars().all())
-                print(f"[LEAVE] after void: total={len(all_players)} answered={answered_count}")
-                if answered_count >= len(all_players):
-                    correct_result = await db.execute(
-                        select(Answer).where(
-                            and_(
-                                Answer.game_id == game_id,
-                                Answer.question_id == current_q.id,
-                                Answer.correct == True,
-                            )
-                        )
-                    )
-                    correct_count = len(correct_result.scalars().all())
-                    await manager.broadcast(code.upper(), {
-                        "event": "all_answered",
-                        "correct_answer": current_q.correct_answer,
-                        "correct_count": correct_count,
-                        "question_id": current_q.id,
-                    })
-
+    # No void-answer insertion and no deletion. Refresh is indistinguishable
+    # from a tab-backgrounding or flaky-wifi disconnect from the server's
+    # perspective; the player may reconnect. The host-side 60s timer is the
+    # backstop if they truly don't return. Voiding here caused: (a) premature
+    # all_answered while the player was reloading, and (b) the reconnecting
+    # player seeing a phantom "wrong" result for a question they never got to
+    # answer.
     await manager.broadcast(code.upper(), {
         "event": "player_left",
         "player_id": player_id,
