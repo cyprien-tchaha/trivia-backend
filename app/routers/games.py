@@ -50,7 +50,6 @@ async def join_game(code: str, req: JoinGameRequest, db: AsyncSession = Depends(
     )
     existing = existing_player_result.scalar_one_or_none()
     if existing:
-        manager.remove_from_grace_window(existing.id)
         await manager.broadcast(code.upper(), {
             "event": "player_rejoined",
             "player": {"id": existing.id, "name": existing.name, "score": existing.score}
@@ -186,7 +185,6 @@ async def submit_answer(code: str, req: dict, db: AsyncSession = Depends(get_db)
     active_players_result = await db.execute(
         select(Player).where(Player.game_id == game.id)
     )
-
     all_players = active_players_result.scalars().all()
     active_player_count = len(all_players)
 
@@ -198,10 +196,9 @@ async def submit_answer(code: str, req: dict, db: AsyncSession = Depends(get_db)
             )
         )
     )
-    all_answers = answered_result.scalars().all()
-    answered_count = len(all_answers)
+    answered_count = len(answered_result.scalars().all())
 
-    print(f"[ANSWER] player={player.name} total={len(all_players)} answered={answered_count}")
+    print(f"[ANSWER] player={player.name} total={active_player_count} answered={answered_count}")
 
     if active_player_count > 0 and answered_count >= active_player_count:
         correct_result = await db.execute(
@@ -299,9 +296,6 @@ async def resume_game(code: str, player_id: str, db: AsyncSession = Depends(get_
     if not player:
         raise HTTPException(status_code=404, detail="Player not found")
 
-    manager.remove_from_grace_window(player_id)
-    print(f"[RESUME] player={player.name} removed from grace window")
-
     result = await db.execute(
         select(Question)
         .where(Question.game_id == game.id)
@@ -349,21 +343,14 @@ async def leave_game(code: str, request: Request, db: AsyncSession = Depends(get
     if not player:
         return {"status": "ok"}
 
-    # Ignore duplicate leave calls — already in grace window
-    if manager.is_in_grace_window(player_id):
-        print(f"[LEAVE] player={player.name} already in grace window, ignoring duplicate")
-        return {"status": "ok"}
-
     game_id = player.game_id
     game_result = await db.execute(select(Game).where(Game.id == game_id))
     game = game_result.scalar_one_or_none()
 
-    manager.add_to_grace_window(player_id, code.upper(), seconds=30)
-    print(f"[LEAVE] player={player.name} id={player_id} added to grace window")
+    print(f"[LEAVE] player={player.name} id={player_id}")
 
-    # Immediately void their answer for the current question — prevents cheating on refresh
+    # Void their answer for the current question — prevents cheating on refresh
     if game:
-        from sqlalchemy import and_
         current_q_result = await db.execute(
             select(Question)
             .where(Question.game_id == game_id)
@@ -371,7 +358,6 @@ async def leave_game(code: str, request: Request, db: AsyncSession = Depends(get
         )
         current_q = current_q_result.scalar_one_or_none()
         if current_q:
-            # Only void if they haven't already answered
             existing_ans = await db.execute(
                 select(Answer).where(
                     and_(
@@ -390,78 +376,45 @@ async def leave_game(code: str, request: Request, db: AsyncSession = Depends(get
                 )
                 db.add(void_answer)
                 await db.commit()
-                print(f"[LEAVE] voided answer for player={player.name} on question={current_q.id[:8]}")
+                print(f"[LEAVE] voided answer for player={player.name}")
+
+                # Check if all players have now answered after the void
+                all_players_result = await db.execute(
+                    select(Player).where(Player.game_id == game_id)
+                )
+                all_players = all_players_result.scalars().all()
+                answered_result = await db.execute(
+                    select(Answer).where(
+                        and_(
+                            Answer.game_id == game_id,
+                            Answer.question_id == current_q.id,
+                        )
+                    )
+                )
+                answered_count = len(answered_result.scalars().all())
+                print(f"[LEAVE] after void: total={len(all_players)} answered={answered_count}")
+                if answered_count >= len(all_players):
+                    correct_result = await db.execute(
+                        select(Answer).where(
+                            and_(
+                                Answer.game_id == game_id,
+                                Answer.question_id == current_q.id,
+                                Answer.correct == True,
+                            )
+                        )
+                    )
+                    correct_count = len(correct_result.scalars().all())
+                    await manager.broadcast(code.upper(), {
+                        "event": "all_answered",
+                        "correct_answer": current_q.correct_answer,
+                        "correct_count": correct_count,
+                        "question_id": current_q.id,
+                    })
 
     await manager.broadcast(code.upper(), {
         "event": "player_left",
         "player_id": player_id,
     })
-
-    async def delayed_delete():
-        await asyncio.sleep(30)
-        if manager.grace_window_expired(player_id):
-            print(f"[LEAVE] grace window expired for player={player_id}, deleting")
-            from app.database import AsyncSessionLocal
-            async with AsyncSessionLocal() as delete_db:
-                try:
-                    p_result = await delete_db.execute(select(Player).where(Player.id == player_id))
-                    p = p_result.scalar_one_or_none()
-                    if p:
-                        # Delete answers first to avoid foreign key violation
-                        await delete_db.execute(delete(Answer).where(Answer.player_id == player_id))
-                        await delete_db.delete(p)
-                        await delete_db.commit()
-                        print(f"[LEAVE] player={player_id} deleted after grace window")
-                        # Fetch FRESH game state — stale game object has wrong current_question_index
-                        fresh_game_result = await delete_db.execute(
-                            select(Game).where(Game.id == game_id)
-                        )
-                        fresh_game = fresh_game_result.scalar_one_or_none()
-                        if fresh_game and fresh_game.status == "active":
-                            active_result = await delete_db.execute(
-                                select(Player).where(Player.game_id == game_id)
-                            )
-                            active_players = active_result.scalars().all()
-                            if len(active_players) > 0:
-                                q_result = await delete_db.execute(
-                                    select(Question)
-                                    .where(Question.game_id == game_id)
-                                    .where(Question.order_index == fresh_game.current_question_index)
-                                )
-                                current_q = q_result.scalar_one_or_none()
-                                if current_q:
-                                    ans_result = await delete_db.execute(
-                                        select(Answer).where(
-                                            and_(
-                                                Answer.game_id == game_id,
-                                                Answer.question_id == current_q.id,
-                                            )
-                                        )
-                                    )
-                                    answered_count = len(ans_result.scalars().all())
-                                    if answered_count >= len(active_players):
-                                        correct_result = await delete_db.execute(
-                                            select(Answer).where(
-                                                and_(
-                                                    Answer.game_id == game_id,
-                                                    Answer.question_id == current_q.id,
-                                                    Answer.correct == True,
-                                                )
-                                            )
-                                        )
-                                        correct_count = len(correct_result.scalars().all())
-                                        await manager.broadcast(code.upper(), {
-                                            "event": "all_answered",
-                                            "correct_answer": current_q.correct_answer,
-                                            "correct_count": correct_count,
-                                            "question_id": current_q.id,
-                                        })
-                except Exception as e:
-                    print(f"[LEAVE] delayed delete error: {e}")
-        else:
-            print(f"[LEAVE] player={player_id} reconnected within grace window")
-
-    asyncio.create_task(delayed_delete())
 
     return {"status": "ok"}
 
@@ -485,7 +438,6 @@ async def admin_game_status(code: str, db: AsyncSession = Depends(get_db)):
     players = result.scalars().all()
 
     ws_connections = len(manager.rooms.get(code.upper(), []))
-    grace_players = [pid for pid in manager.grace_window if manager.is_in_grace_window(pid)]
 
     return {
         "game": {
@@ -496,5 +448,5 @@ async def admin_game_status(code: str, db: AsyncSession = Depends(get_db)):
         },
         "players": [{"id": p.id, "name": p.name, "score": p.score} for p in players],
         "websocket_connections": ws_connections,
-        "players_in_grace_window": len(grace_players),
+        "players_in_grace_window": 0,
     }
