@@ -399,3 +399,32 @@ async def admin_game_status(code: str, db: AsyncSession = Depends(get_db)):
         "players": [{"id": p.id, "name": p.name, "score": p.score} for p in players],
         "websocket_connections": ws_connections,
     }
+
+@router.post("/{code}/players/{player_id}/remove")
+async def remove_player(code: str, player_id: str, db: AsyncSession = Depends(get_db)):
+    """Host removes a player from the lobby. Lobby-only — once the game has
+    started, player removal is out of scope and this endpoint will reject."""
+    result = await db.execute(select(Game).where(Game.code == code.upper()))
+    game = result.scalar_one_or_none()
+    if not game:
+        raise HTTPException(status_code=404, detail="Game not found")
+
+    if game.status != "lobby":
+        raise HTTPException(status_code=400, detail="Can only remove players before the game starts")
+
+    result = await db.execute(select(Player).where(Player.id == player_id))
+    player = result.scalar_one_or_none()
+    if not player or player.game_id != game.id:
+        raise HTTPException(status_code=404, detail="Player not found in this game")
+
+    player_name = player.name
+    await db.execute(delete(Player).where(Player.id == player_id))
+    await db.commit()
+
+    print(f"[REMOVE] {code.upper()} player={player_name} id={player_id[:8]}")
+
+    await manager.broadcast(code.upper(), {
+        "event": "player_removed",
+        "player_id": player_id,
+    })
+    return {"status": "ok"}
