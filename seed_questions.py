@@ -167,7 +167,7 @@ async def seed(game_code: str):
                 difficulty=q["difficulty"],
                 category=q["category"],
                 order_index=i,
-            )
+            ) 
             db.add(question)
         await db.commit()
         print(f"Seeded {min(len(questions), game.question_count)} questions for game {game_code}")
