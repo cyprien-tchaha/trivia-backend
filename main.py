@@ -1,6 +1,6 @@
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from app.routers import games, questions
+from app.routers import games, questions, search
 from app.websocket.manager import manager
 import uvicorn
 import os 
@@ -17,6 +17,7 @@ app.add_middleware(
 
 app.include_router(games.router, prefix="/api/games", tags=["games"])
 app.include_router(questions.router, prefix="/api/questions", tags=["questions"])
+app.include_router(search.router, prefix="/api/search", tags=["search"])
 
 @app.get("/health")
 async def health():
