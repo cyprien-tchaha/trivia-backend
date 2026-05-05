@@ -82,7 +82,7 @@ FALLBACK_QUESTIONS = {
         {"text": "In Demon Slayer, what is Tanjiro's breathing style?", "options": ["Water Breathing", "Flame Breathing", "Sun Breathing", "Wind Breathing"], "correct_answer": "Water Breathing"},
         {"text": "What is the name of the organization in Fullmetal Alchemist?", "options": ["State Alchemists", "Homunculi", "Amestris Army", "Brotherhood"], "correct_answer": "State Alchemists"},
     ],
-    "tv": [
+    "tv_shows": [
         {"text": "In Breaking Bad, what is Walter White's drug pseudonym?", "options": ["The Cook", "Heisenberg", "Blue Sky", "Mr. White"], "correct_answer": "Heisenberg"},
         {"text": "What city is The Office (US) set in?", "options": ["Philadelphia", "Pittsburgh", "Scranton", "Allentown"], "correct_answer": "Scranton"},
         {"text": "In Game of Thrones, what is the sigil of House Stark?", "options": ["Lion", "Dragon", "Direwolf", "Stag"], "correct_answer": "Direwolf"},
@@ -93,6 +93,18 @@ FALLBACK_QUESTIONS = {
         {"text": "What fungus turns people into infected in The Last of Us?", "options": ["Aspergillus", "Cordyceps", "Candida", "Fusarium"], "correct_answer": "Cordyceps"},
         {"text": "How many episodes are in Stranger Things season 1?", "options": ["6", "8", "10", "12"], "correct_answer": "8"},
         {"text": "In The Sopranos, what is Tony's last name?", "options": ["Bada", "Soprano", "Gervasi", "Aprile"], "correct_answer": "Soprano"},
+    ],
+    "movies": [
+        {"text": "Who directed Pulp Fiction?", "options": ["Martin Scorsese", "Quentin Tarantino", "Steven Spielberg", "Christopher Nolan"], "correct_answer": "Quentin Tarantino"},
+        {"text": "In The Matrix, which pill does Neo take?", "options": ["Red", "Blue", "Both", "Neither"], "correct_answer": "Red"},
+        {"text": "What is the name of Tom Hanks' character in Forrest Gump?", "options": ["Forrest Gump", "Bubba Blue", "Lieutenant Dan", "Jenny Curran"], "correct_answer": "Forrest Gump"},
+        {"text": "Which film won Best Picture at the 2020 Oscars?", "options": ["1917", "Parasite", "Joker", "Once Upon a Time in Hollywood"], "correct_answer": "Parasite"},
+        {"text": "In Inception, what object does Cobb use to test reality?", "options": ["A coin", "A ring", "A spinning top", "A photograph"], "correct_answer": "A spinning top"},
+        {"text": "Who played the Joker in The Dark Knight?", "options": ["Joaquin Phoenix", "Heath Ledger", "Jared Leto", "Jack Nicholson"], "correct_answer": "Heath Ledger"},
+        {"text": "What year was the original Star Wars released?", "options": ["1975", "1977", "1980", "1983"], "correct_answer": "1977"},
+        {"text": "In The Godfather, who succeeds Vito as the head of the family?", "options": ["Sonny", "Fredo", "Michael", "Tom Hagen"], "correct_answer": "Michael"},
+        {"text": "What is the highest-grossing film of all time (as of 2024)?", "options": ["Avatar", "Avengers: Endgame", "Titanic", "Star Wars: The Force Awakens"], "correct_answer": "Avatar"},
+        {"text": "Who directed Jurassic Park?", "options": ["George Lucas", "Steven Spielberg", "James Cameron", "Ron Howard"], "correct_answer": "Steven Spielberg"},
     ],
 }
 

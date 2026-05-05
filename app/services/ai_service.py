@@ -10,7 +10,8 @@ client = anthropic.AsyncAnthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
 CATEGORY_PROMPTS = {
     "anime": "Japanese anime series, manga, and anime films",
-    "tv": "Western TV shows, series, and television programs",
+    "tv_shows": "Western TV shows, series, and television programs",
+    "movies": "movies and films from any era and country",
 }
 
 DIFFICULTY_DESCRIPTIONS = {
@@ -179,12 +180,19 @@ def _get_fallback_questions(category: str, difficulty: int) -> list[dict]:
             {"text": "Which studio animated Spirited Away?", "options": ["Toei Animation", "Madhouse", "Studio Ghibli", "Gainax"], "correct_answer": "Studio Ghibli", "difficulty": difficulty, "category": category},
             {"text": "What sword style does Roronoa Zoro use?", "options": ["One Sword Style", "Two Sword Style", "Three Sword Style", "Four Sword Style"], "correct_answer": "Three Sword Style", "difficulty": difficulty, "category": category},
         ],
-        "tv": [
+        "tv_shows": [
             {"text": "In Breaking Bad, what is Walter White's drug pseudonym?", "options": ["The Cook", "Heisenberg", "Blue Sky", "Mr. White"], "correct_answer": "Heisenberg", "difficulty": difficulty, "category": category},
             {"text": "What city is The Office (US) set in?", "options": ["Philadelphia", "Pittsburgh", "Scranton", "Allentown"], "correct_answer": "Scranton", "difficulty": difficulty, "category": category},
             {"text": "In Game of Thrones, what is the sigil of House Stark?", "options": ["Lion", "Dragon", "Direwolf", "Stag"], "correct_answer": "Direwolf", "difficulty": difficulty, "category": category},
             {"text": "What is the name of the coffee shop in Friends?", "options": ["Central Perk", "The Grind", "Java Joe's", "Perks"], "correct_answer": "Central Perk", "difficulty": difficulty, "category": category},
             {"text": "Who plays Eleven in Stranger Things?", "options": ["Sadie Sink", "Millie Bobby Brown", "Natalia Dyer", "Finn Wolfhard"], "correct_answer": "Millie Bobby Brown", "difficulty": difficulty, "category": category},
+        ],
+        "movies": [
+            {"text": "Who directed Pulp Fiction?", "options": ["Martin Scorsese", "Quentin Tarantino", "Steven Spielberg", "Christopher Nolan"], "correct_answer": "Quentin Tarantino", "difficulty": difficulty, "category": category},
+            {"text": "In The Matrix, which pill does Neo take?", "options": ["Red", "Blue", "Both", "Neither"], "correct_answer": "Red", "difficulty": difficulty, "category": category},
+            {"text": "What is the name of Tom Hanks' character in Forrest Gump?", "options": ["Forrest Gump", "Bubba Blue", "Lieutenant Dan", "Jenny Curran"], "correct_answer": "Forrest Gump", "difficulty": difficulty, "category": category},
+            {"text": "Which film won Best Picture at the 2020 Oscars?", "options": ["1917", "Parasite", "Joker", "Once Upon a Time in Hollywood"], "correct_answer": "Parasite", "difficulty": difficulty, "category": category},
+            {"text": "In Inception, what object does Cobb use to test reality?", "options": ["A coin", "A ring", "A spinning top", "A photograph"], "correct_answer": "A spinning top", "difficulty": difficulty, "category": category},
         ],
     }
     return fallback.get(category, fallback["anime"])

@@ -11,7 +11,7 @@ Why proxy instead of calling from the frontend:
 Failure mode is soft: on upstream timeout/error we return an empty result list
 with HTTP 200, so the autocomplete UI degrades to "no suggestions" rather than
 showing an error toast. The user can still type and submit; they just won't
-see picker hints. 
+see picker hints. That's the right tradeoff for autocomplete.
 """
 from fastapi import APIRouter, Query
 from typing import Literal, Optional
