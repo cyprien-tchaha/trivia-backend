@@ -47,3 +47,21 @@ class Answer(Base):
     answer      = Column(String, nullable=False)
     correct     = Column(Boolean, default=False)
     created_at  = Column(DateTime(timezone=True), server_default=func.now())
+
+class QuestionBank(Base):
+    """
+    Pre-generated questions for the free tier.
+
+    Unlike Question, these are not tied to a game. When a free game starts we
+    sample rows matching (topic, difficulty) and COPY them into Question rows
+    for that game, so the rest of the game flow is unchanged.
+    """
+    __tablename__ = "question_bank"
+    id             = Column(String, primary_key=True, default=gen_uuid)
+    topic          = Column(String, nullable=False, index=True)
+    category       = Column(String, nullable=False, default="anime")
+    difficulty     = Column(Integer, nullable=False, index=True)
+    text           = Column(String, nullable=False, unique=True)
+    options        = Column(JSON)
+    correct_answer = Column(String, nullable=False)
+    created_at     = Column(DateTime(timezone=True), server_default=func.now())
