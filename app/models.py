@@ -1,4 +1,6 @@
-from sqlalchemy import Column, String, Integer, DateTime, ForeignKey, JSON, Boolean
+from sqlalchemy import (
+    Column, String, Integer, DateTime, ForeignKey, JSON, Boolean, UniqueConstraint
+)
 from sqlalchemy.sql import func
 from app.database import Base
 import uuid
@@ -55,13 +57,21 @@ class QuestionBank(Base):
     Unlike Question, these are not tied to a game. When a free game starts we
     sample rows matching (topic, difficulty) and COPY them into Question rows
     for that game, so the rest of the game flow is unchanged.
+
+    Uniqueness is per TOPIC, not global. A global unique index on text would
+    make two difficulties of the same topic collide with each other when they
+    are seeded concurrently, which is not a real duplicate problem.
     """
     __tablename__ = "question_bank"
+    __table_args__ = (
+        UniqueConstraint("topic", "text", name="uq_question_bank_topic_text"),
+    )
+
     id             = Column(String, primary_key=True, default=gen_uuid)
     topic          = Column(String, nullable=False, index=True)
     category       = Column(String, nullable=False, default="anime")
     difficulty     = Column(Integer, nullable=False, index=True)
-    text           = Column(String, nullable=False, unique=True)
+    text           = Column(String, nullable=False)
     options        = Column(JSON)
     correct_answer = Column(String, nullable=False)
     created_at     = Column(DateTime(timezone=True), server_default=func.now())

@@ -16,7 +16,7 @@ MIGRATIONS = [
         topic          VARCHAR NOT NULL,
         category       VARCHAR NOT NULL DEFAULT 'anime',
         difficulty     INTEGER NOT NULL,
-        text           VARCHAR NOT NULL UNIQUE,
+        text           VARCHAR NOT NULL,
         options        JSON,
         correct_answer VARCHAR NOT NULL,
         created_at     TIMESTAMP WITH TIME ZONE DEFAULT NOW()
@@ -25,6 +25,17 @@ MIGRATIONS = [
     """
     CREATE INDEX IF NOT EXISTS ix_question_bank_topic_diff
     ON question_bank (topic, difficulty);
+    """,
+
+    # A global unique index on text made two difficulties of the SAME topic
+    # collide while seeding concurrently. Uniqueness belongs per topic.
+    """
+    ALTER TABLE question_bank
+    DROP CONSTRAINT IF EXISTS question_bank_text_key;
+    """,
+    """
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_question_bank_topic_text
+    ON question_bank (topic, text);
     """,
 ]
 

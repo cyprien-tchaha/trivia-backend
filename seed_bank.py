@@ -20,17 +20,18 @@ The model reliably produces near-duplicates despite being told not to:
 Comparing question text does not catch these - the two share almost no words.
 What they share is the ANSWER, and that is the reliable signal. So the rule is
 one question per distinct answer within a (topic, difficulty) pair, with the
-answer normalised first so that leading filler ("to become", "the", "it
-becomes") cannot disguise a match.
+answer normalised first so leading filler cannot disguise a match.
 
-Expect [partial] results because of this. If a topic can only yield 60 distinct
-easy answers then 60 is the honest number of distinct easy questions, and
-padding to 100 is exactly what produced duplicates before. Partial is correct
-behaviour, not a failure.
+Expect [partial] results. If a topic only yields 60 distinct easy answers then
+60 is the honest number of distinct easy questions, and padding to 100 is what
+produced duplicates in the first place.
 
 This raises bank quality but is NOT the guarantee that a single game avoids
 duplicates - that is enforced at draw time, where checking 10 questions is far
 more reliable than keeping 100 mutually distinct.
+
+Rows are inserted one at a time inside savepoints. A batch of ten that contains
+one row violating the unique index must not take the other nine down with it.
 """
 
 import argparse
@@ -42,6 +43,7 @@ import time
 from collections import defaultdict
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 
 from app.database import AsyncSessionLocal
 from app.models import QuestionBank
@@ -67,8 +69,8 @@ DIFFICULTIES     = [1, 2, 3, 4, 5]
 TARGET_PER_PAIR  = 100
 BATCH_SIZE       = 10
 CONCURRENCY      = 3
-MAX_EMPTY_ROUNDS = 4      # slightly higher: more rejections means more retries
-MAX_PER_ANSWER   = 1      # one question per distinct answer, per pair
+MAX_EMPTY_ROUNDS = 4
+MAX_PER_ANSWER   = 1
 
 EST_COST_PER_CALL = 0.046
 
@@ -77,9 +79,8 @@ for _cat in ("anime", "tv_shows", "movies"):
     for _q in _get_fallback_questions(_cat, 1):
         FALLBACK_TEXTS.add(_q["text"])
 
-# leading filler that changes the string but not the meaning
-_LEAD = r"^(to\s+become\s+|to\s+be\s+|it\s+becomes\s+|becomes\s+|to\s+|the\s+|a\s+|an\s+)+"
-_FILL = r"\b(the|a|an|of|to|become|becomes|his|her|their|is|are|it)\b"
+_LEAD = r"^(to\s+become\s+|to\s+be\s+|it\s+becomes\s+|becomes\s+|he\s+becomes\s+|to\s+|the\s+|a\s+|an\s+)+"
+_FILL = r"\b(the|a|an|of|to|become|becomes|his|her|their|is|are|it|he|she)\b"
 
 
 def norm_answer(s: str) -> str:
@@ -89,7 +90,7 @@ def norm_answer(s: str) -> str:
         "To become King of the Pirates" -> "king pirates"
         "The King of the Pirates"       -> "king pirates"
         "It becomes rubber"             -> "rubber"
-        "Rubber"                        -> "rubber"
+        "He becomes rubber"             -> "rubber"
     """
     s = s.lower().strip()
     s = re.sub(r"[^\w\s]", " ", s)
@@ -115,8 +116,9 @@ class Stats:
         self.calls = 0
         self.inserted = 0
         self.rejected_fallback = 0
-        self.rejected_dupe = 0
+        self.rejected_text = 0
         self.rejected_answer = 0
+        self.rejected_db = 0
         self.errors = 0
         self.lock = asyncio.Lock()
 
@@ -124,7 +126,7 @@ class Stats:
 # ---------------------------------------------------------------- helpers
 
 async def load_pair(db, topic: str, difficulty: int):
-    """Return (texts, normalised texts, normalised answers) already banked."""
+    """Return (texts, normalised texts, normalised answer counts) for this pair."""
     rows = await db.execute(
         select(QuestionBank.text, QuestionBank.correct_answer).where(
             QuestionBank.topic == topic,
@@ -157,12 +159,13 @@ async def seed_pair(topic, category, difficulty, target, stats, sem, dry_run):
                 return
 
             empty_rounds = 0
+            gen_failures = 0
 
             while len(have) < target and empty_rounds < MAX_EMPTY_ROUNDS:
                 want = min(BATCH_SIZE, target - len(have))
 
-                # generate_questions truncates excludes to the first 50, so send a
-                # random sample rather than the oldest 50.
+                # generate_questions truncates excludes to the first 50, so send
+                # a random sample rather than the oldest 50.
                 pool = list(have)
                 excludes = random.sample(pool, min(50, len(pool))) if pool else []
 
@@ -177,6 +180,7 @@ async def seed_pair(topic, category, difficulty, target, stats, sem, dry_run):
                 except Exception as e:
                     async with stats.lock:
                         stats.errors += 1
+                    gen_failures += 1
                     print(f"[error] {topic} d{difficulty}: {e}")
                     empty_rounds += 1
                     await asyncio.sleep(3)
@@ -198,7 +202,7 @@ async def seed_pair(topic, category, difficulty, target, stats, sem, dry_run):
 
                     if txt in have or nt in have_norm:
                         async with stats.lock:
-                            stats.rejected_dupe += 1
+                            stats.rejected_text += 1
                         continue
 
                     if answers[na] >= MAX_PER_ANSWER:
@@ -206,29 +210,32 @@ async def seed_pair(topic, category, difficulty, target, stats, sem, dry_run):
                             stats.rejected_answer += 1
                         continue
 
-                    db.add(QuestionBank(
-                        topic=topic,
-                        category=category,
-                        difficulty=difficulty,
-                        text=txt,
-                        options=q["options"],
-                        correct_answer=q["correct_answer"],
-                    ))
+                    # Insert inside a savepoint. If this row trips the unique
+                    # index, only this row is rolled back - the rest survive.
+                    try:
+                        async with db.begin_nested():
+                            db.add(QuestionBank(
+                                topic=topic,
+                                category=category,
+                                difficulty=difficulty,
+                                text=txt,
+                                options=q["options"],
+                                correct_answer=q["correct_answer"],
+                            ))
+                            await db.flush()
+                    except IntegrityError:
+                        async with stats.lock:
+                            stats.rejected_db += 1
+                        continue
+
                     have.add(txt)
                     have_norm.add(nt)
                     answers[na] += 1
                     added += 1
 
-                if added:
-                    try:
-                        await db.commit()
-                    except Exception as e:
-                        await db.rollback()
-                        print(f"[commit-retry] {topic} d{difficulty}: {e}")
-                        have, have_norm, answers = await load_pair(db, topic, difficulty)
-                        empty_rounds += 1
-                        continue
+                await db.commit()
 
+                if added:
                     async with stats.lock:
                         stats.inserted += added
                     empty_rounds = 0
@@ -237,11 +244,14 @@ async def seed_pair(topic, category, difficulty, target, stats, sem, dry_run):
 
                 print(f"  {topic} d{difficulty}: +{added} -> {len(have)}/{target}")
 
-            if len(have) < target:
+            if len(have) >= target:
+                print(f"[done] {topic} d{difficulty}: {len(have)}/{target}")
+            elif gen_failures:
+                print(f"[partial] {topic} d{difficulty}: stopped at {len(have)}/{target} "
+                      f"after {gen_failures} generation errors - re-run to continue")
+            else:
                 print(f"[partial] {topic} d{difficulty}: stopped at {len(have)}/{target} "
                       f"(ran out of distinct answers - this is fine)")
-            else:
-                print(f"[done] {topic} d{difficulty}: {len(have)}/{target}")
 
 
 # ---------------------------------------------------------------- main
@@ -284,8 +294,9 @@ async def main():
         print(f"inserted            {stats.inserted}")
         print(f"generation calls    {stats.calls}")
         print(f"rejected (fallback) {stats.rejected_fallback}")
-        print(f"rejected (text)     {stats.rejected_dupe}")
+        print(f"rejected (text)     {stats.rejected_text}")
         print(f"rejected (answer)   {stats.rejected_answer}")
+        print(f"rejected (db)       {stats.rejected_db}")
         print(f"errors              {stats.errors}")
         print(f"elapsed             {mins:.1f} min")
         print(f"estimated spend     ~${stats.calls * EST_COST_PER_CALL:.2f}")
