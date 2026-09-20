@@ -49,6 +49,13 @@ ALIASES = {
 
 def _norm_topic(s: str) -> str:
     s = (s or "").strip().lower()
+    # The host UI's title picker sends "Name (Year)" — it appends the year the
+    # search proxy returned, so "One Piece" arrives as "One Piece (1999)".
+    # That suffix has to go before punctuation is flattened, or the year
+    # survives as a bare token ("one piece 1999") and never matches a banked
+    # topic. Only a TRAILING parenthesised year is a picker artifact; a year
+    # inside the title ("Blade Runner 2049") is part of the name and stays.
+    s = re.sub(r"\s*\((?:19|20)\d{2}\)\s*$", "", s)
     s = re.sub(r"[^\w\s]", " ", s)
     s = " ".join(s.split())
     return s

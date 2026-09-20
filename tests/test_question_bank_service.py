@@ -30,6 +30,30 @@ def test_match_returns_the_stored_casing(topics, expected):
     assert match_bank_topic(topics) == expected
 
 
+@pytest.mark.parametrize("topics,expected", [
+    ("One Piece (1999)", "One Piece"),
+    ("Naruto (2002)", "Naruto"),
+    ("Attack on Titan (2013)", "Attack on Titan"),
+    ("Breaking Bad (2008)", "Breaking Bad"),
+    ("one piece (1999)", "One Piece"),
+    ("Marvel Cinematic Universe (2008)", "Marvel Cinematic Universe"),
+])
+def test_title_picker_year_suffix_still_matches(topics, expected):
+    """The host UI's title picker sends "Name (Year)" — see host/page.tsx,
+    which appends t.year from the search proxy. Without stripping that suffix
+    the bank never matches a game created through the picker, which is the
+    primary path, so every such game would silently pay for AI generation."""
+    assert match_bank_topic(topics) == expected
+
+
+def test_a_year_inside_the_title_is_not_stripped():
+    """Only a trailing parenthesised year is a picker artifact. A year that is
+    part of the title itself must survive normalisation."""
+    from app.services.question_bank_service import _norm_topic
+    assert _norm_topic("Blade Runner 2049") == "blade runner 2049"
+    assert _norm_topic("2012") == "2012"
+
+
 @pytest.mark.parametrize("alias,expected", [
     ("mha", "My Hero Academia"),
     ("jjk", "Jujutsu Kaisen"),
