@@ -1,0 +1,10 @@
+# Test-only dependencies. Deliberately separate from requirements.txt so the
+# Railway build (nixpacks reads requirements.txt) doesn't ship a test runner
+# to production.
+#
+#   pip install -r requirements.txt -r requirements-dev.txt
+#   pytest
+
+pytest==9.1.1
+pytest-asyncio==1.4.0
+aiosqlite==0.22.1

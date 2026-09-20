@@ -4,13 +4,45 @@ from sqlalchemy import select
 from app.database import get_db
 from app.models import Question, Game
 from app.services.ai_service import generate_questions
+from app.services.question_bank_service import try_bank
 
 router = APIRouter()
+
+
+async def _store_questions(db, game_id: str, questions: list[dict]) -> None:
+    """
+    Persist a game's questions in order. Bank draws and AI output have the same
+    shape by design, so both paths store them through here.
+    """
+    for i, q in enumerate(questions):
+        db.add(Question(
+            game_id=game_id,
+            text=q["text"],
+            options=q["options"],
+            correct_answer=q["correct_answer"],
+            difficulty=q["difficulty"],
+            category=q["category"],
+            order_index=i,
+        ))
+    await db.commit()
 
 async def create_ai_questions(game_id: str, category: str, difficulty: int, count: int, topics: str = ""):
     from app.database import AsyncSessionLocal
     async with AsyncSessionLocal() as db:
         try:
+            # Free tier: serve from the pre-generated bank when it can cover
+            # the whole game, which costs one COUNT instead of a generation
+            # call. All-or-nothing — see try_bank for why a partial draw is
+            # not topped up from the AI.
+            banked = await try_bank(db, topics, difficulty, count)
+            if banked is not None:
+                await _store_questions(db, game_id, banked)
+                print(
+                    f"Served {len(banked)} banked questions for game {game_id} "
+                    f"(topic={topics!r}, difficulty={difficulty})"
+                )
+                return
+
             # Fetch recent questions for same topic+difficulty to avoid repeats
             from sqlalchemy import select, desc
             from app.models import Question as QuestionModel, Game as GameModel
@@ -35,18 +67,7 @@ async def create_ai_questions(game_id: str, category: str, difficulty: int, coun
                 print(f"Excluding {len(exclude_questions)} previously asked questions")
 
             questions = await generate_questions(category, difficulty, count, topics, exclude_questions)
-            for i, q in enumerate(questions):
-                question = Question(
-                    game_id=game_id,
-                    text=q["text"],
-                    options=q["options"],
-                    correct_answer=q["correct_answer"],
-                    difficulty=q["difficulty"],
-                    category=q["category"],
-                    order_index=i,
-                )
-                db.add(question)
-            await db.commit()
+            await _store_questions(db, game_id, questions)
             print(f"Generated {len(questions)} AI questions for game {game_id}")
         except Exception as e:
             print(f"AI question generation failed: {e}")

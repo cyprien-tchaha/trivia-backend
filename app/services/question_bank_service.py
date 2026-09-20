@@ -174,3 +174,28 @@ async def draw_from_bank(db: AsyncSession, topic: str, difficulty: int, count: i
         }
         for r in picked[:count]
     ]
+
+async def try_bank(db: AsyncSession, topics: str, difficulty: int, count: int):
+    """
+    Return `count` questions drawn from the bank, or None if this game should
+    fall through to live AI generation.
+
+    This is the single decision point for bank-vs-AI, and it is all-or-nothing.
+    A topic we have banked but which holds fewer than `count` rows at this
+    difficulty returns None rather than a partial draw: topping the shortfall
+    up from the AI would put questions that never passed the distinct-answer
+    filter into the same game, which is the duplicate the bank exists to
+    prevent.
+
+    Falls through to AI when the topic is empty (a whole-category game), lists
+    several titles (a custom game), is not banked, or is banked but thin at
+    this difficulty.
+    """
+    topic = match_bank_topic(topics)
+    if topic is None:
+        return None
+
+    if not await bank_has_enough(db, topic, difficulty, count):
+        return None
+
+    return await draw_from_bank(db, topic, difficulty, count)
