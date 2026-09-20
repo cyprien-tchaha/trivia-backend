@@ -158,24 +158,26 @@ Auto mode is ideal for experienced users who trust the workflow and want maximum
 
 ## Infrastructure Conventions
 
-**Kubernetes:** Always set resource limits + liveness/readiness probes for Micronaut services.
+**Platform:** Railway (nixpacks). Config lives in `railway.json` and `Procfile`
+— both must agree on the start command.
 
-**Terraform:** `terraform plan` review required before every `apply`. No manual console changes.
-
-**Platforms:** Railway (staging) · AWS (production) · GCP (secondary)
-
-**Railway** (`railway.toml`):
-```toml
-[build]
-builder = "nixpacks"
-[deploy]
-startCommand = "java -jar build/libs/*-all.jar"
-healthcheckPath = "/health"
-healthcheckTimeout = 60
-restartPolicyType = "on-failure"
+**Railway** (`railway.json`, as deployed today):
+```json
+{
+  "build":  { "builder": "NIXPACKS" },
+  "deploy": {
+    "startCommand": "uvicorn main:app --host 0.0.0.0 --port $PORT",
+    "healthcheckPath": "/health",
+    "restartPolicyType": "ON_FAILURE"
+  }
+}
 ```
 
-**AWS (production):** ECS Fargate + RDS + Secrets Manager (never plain env vars for secrets).
+**Secrets** are Railway environment variables (`DATABASE_URL`,
+`ANTHROPIC_API_KEY`, `TMDB_API_KEY`). Never commit them; `.env` is gitignored.
+
+**Terraform:** `terraform plan` review required before every `apply`. No manual
+console changes. (Not used by this repo today.)
 
 
 ---
