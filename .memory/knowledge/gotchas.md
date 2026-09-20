@@ -28,14 +28,16 @@ Things that look wrong but are deliberate, and things that are genuinely wrong.
 
 ## Genuinely wrong / incomplete
 
-- **`app/services/question_bank_service.py` is dead code.** 175 lines, complete,
-  with a seeded table behind it — and **nothing imports it**. The free-tier bank
-  path was built but never wired into `create_ai_questions` in
-  `app/routers/questions.py`. Every game currently pays for live AI generation.
-  Wiring it up is the highest-value small task in the repo.
 - **`app/services/game_service.py` is a 0-byte file.**
-- **No tests, no test runner.** The risky logic: scoring (`100 + speed_bonus`),
-  the duplicate-answer guard in `/answer`, and the `all_answered` counting race.
+- **Test coverage is narrow.** `pytest` exists now (42 tests, in-memory SQLite)
+  but covers only the question bank and its wiring. Still untested: scoring
+  (`100 + speed_bonus`), the duplicate-answer guard in `/answer`, and the
+  `all_answered` counting race.
+- **The SQLite harness cannot prove transaction-abort behavior.** Postgres
+  leaves a transaction aborted after a failed statement and refuses everything
+  until rollback; aiosqlite is far more forgiving. So the `db.rollback()` calls
+  in `create_ai_questions`' error paths are correct-by-reasoning, not
+  covered-by-test. Keep them.
 - **`all_answered` counts every `Player` row as active.** A player who left is
   still counted (by design — see `/leave` above), so `all_answered` only fires
   once everyone including the departed answers, or never. The host timer covers
@@ -60,11 +62,29 @@ Things that look wrong but are deliberate, and things that are genuinely wrong.
   player. Game codes are 6 uppercase letters from `random.choices` (not
   `secrets`), so they're guessable at ~309M combinations but not crypto-random.
 
+## Question bank (wired in as of the bank-serving change)
+
+- **`try_bank()` is the only bank-vs-AI decision point.** It is all-or-nothing:
+  a banked topic holding fewer rows than the game asks for falls through to
+  full AI generation. Topping up from the AI would put questions that never
+  passed the distinct-answer filter into the same game — the exact duplicate
+  the bank exists to prevent.
+- **A game's topic can be banked under a different category than the game.**
+  The bank seeds "Naruto" as anime; nothing stops a host creating a
+  `category="movies"` game with `topics="Naruto"`. Stored questions take
+  `category` and `difficulty` from the **game**, never from the bank row, so
+  `Question.category` never silently diverges from `Game.category`.
+- **The bank and the AI have separate `except` blocks on purpose.** A bank
+  failure logs `[BANK] ... falling through to AI` and lets the AI serve the
+  game. Merging them would report a bank fault as an AI fault, sending whoever
+  reads the log to the wrong file.
+
 ## Conventions that bite
 
 - **Always `code.upper()`** before comparing a game code or using it as a room key.
 - **Async all the way down** — every handler `async def`, every DB call awaited.
   A sync session will deadlock the loop.
 - **Logging is `print()` with a bracketed tag** (`[WS-CONNECT]`, `[ANSWER]`,
-  `[RESUME]`, `[ADVANCE]`). Match it or convert all of it — don't mix in
-  `logging` piecemeal.
+  `[RESUME]`, `[ADVANCE]`, `[BANK]`, `[AI-GEN]`, `[FALLBACK]`). Match it or
+  convert all of it — don't mix in `logging` piecemeal. `app/routers/search.py`
+  and parts of `games.py` still have untagged prints.

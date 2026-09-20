@@ -107,6 +107,24 @@ Postgres `uuid`.
   performance under load. The pool settings above it are tuned for Railway's
   idle timeout.
 
+## Question generation
+
+`POST /api/questions/{game_id}/generate` queues `create_ai_questions` as a
+background task. It tries three sources in order:
+
+1. **Question bank** — `try_bank()` serves the whole game from pre-generated
+   rows when the game's topic is banked and holds at least `question_count`
+   rows at that difficulty. All-or-nothing: a thin bank falls through rather
+   than topping up from the AI, because AI questions never pass the
+   distinct-correct-answer filter that `draw_from_bank` guarantees.
+2. **Live AI generation** — the paid path, excluding the 50 most recently asked
+   questions for the same topic/difficulty/category.
+3. **Hardcoded fallback** — a small static set, so a game is never left empty.
+
+Stored `Question.category` and `Question.difficulty` always come from the
+**game**, never from the source row, so they can't diverge from `Game`. Seed
+the bank with `python seed_bank.py`; inspect it with `python show_bank.py`.
+
 ## Conventions
 
 - **`snake_case` everywhere** — Python, JSON over the wire, and SQL columns all
@@ -129,12 +147,10 @@ Postgres `uuid`.
 
 Real, and worth knowing before you touch nearby code:
 
-- **No tests.** Scoring (`100 + speed_bonus`), the duplicate-answer guard, and
-  the `all_answered` counting race are the parts that most need them.
-- **`app/services/question_bank_service.py` is not wired in.** It's complete
-  (175 lines) and the `question_bank` table is seeded, but nothing imports it,
-  so every game falls through to paid live AI generation. Connecting it to
-  `create_ai_questions` in `app/routers/questions.py` is the free-tier feature.
+- **Test coverage is narrow.** There is a suite now (`pytest`, 42 tests) but it
+  covers only the question bank and its wiring. Scoring (`100 + speed_bonus`),
+  the duplicate-answer guard in `/answer`, and the `all_answered` counting race
+  are still untested and are the parts that most need it.
 - **`app/services/game_service.py` is an empty file.**
 - **Migrations are hand-written SQL** in `migrate.py`, applied top to bottom on
   every run via `IF NOT EXISTS`. Alembic is installed but not initialised. Add

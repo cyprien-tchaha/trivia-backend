@@ -9,10 +9,23 @@ from app.services.question_bank_service import try_bank
 router = APIRouter()
 
 
-async def _store_questions(db, game_id: str, questions: list[dict]) -> None:
+async def _store_questions(
+    db, game_id: str, questions: list[dict], *, category: str, difficulty: int
+) -> None:
     """
-    Persist a game's questions in order. Bank draws and AI output have the same
-    shape by design, so both paths store them through here.
+    Persist a game's questions in order. Every source — bank draw, AI output,
+    hardcoded fallback — stores through here.
+
+    `category` and `difficulty` come from the game, never from the question,
+    so a stored Question always agrees with its Game. This matters on the bank
+    path: the bank's rows carry the category the topic was seeded under, and a
+    game can legitimately ask for a topic banked under a different category
+    (category="movies" with topics="Naruto", which is banked as anime). Taking
+    the row's own category there would silently diverge from Game.category.
+
+    The three sources all supply the same difficulty anyway — bank rows are
+    queried by it, and the AI stamps every generated question with it — so
+    taking it from the game loses nothing and keeps one rule.
     """
     for i, q in enumerate(questions):
         db.add(Question(
@@ -20,8 +33,8 @@ async def _store_questions(db, game_id: str, questions: list[dict]) -> None:
             text=q["text"],
             options=q["options"],
             correct_answer=q["correct_answer"],
-            difficulty=q["difficulty"],
-            category=q["category"],
+            difficulty=difficulty,
+            category=category,
             order_index=i,
         ))
     await db.commit()
@@ -29,6 +42,11 @@ async def _store_questions(db, game_id: str, questions: list[dict]) -> None:
 async def create_ai_questions(game_id: str, category: str, difficulty: int, count: int, topics: str = ""):
     from app.database import AsyncSessionLocal
     async with AsyncSessionLocal() as db:
+        # The bank gets its own try/except rather than sharing the AI path's.
+        # These are unrelated systems, and this log line is the only signal an
+        # operator gets from a background task — reporting a failed bank draw
+        # as "AI generation failed" sends them to the wrong file. A bank
+        # failure is not fatal: fall through and let the AI serve the game.
         try:
             # Free tier: serve from the pre-generated bank when it can cover
             # the whole game, which costs one COUNT instead of a generation
@@ -36,13 +54,22 @@ async def create_ai_questions(game_id: str, category: str, difficulty: int, coun
             # not topped up from the AI.
             banked = await try_bank(db, topics, difficulty, count)
             if banked is not None:
-                await _store_questions(db, game_id, banked)
+                await _store_questions(
+                    db, game_id, banked, category=category, difficulty=difficulty
+                )
                 print(
-                    f"Served {len(banked)} banked questions for game {game_id} "
+                    f"[BANK] Served {len(banked)} banked questions for game {game_id} "
                     f"(topic={topics!r}, difficulty={difficulty})"
                 )
                 return
+        except Exception as e:
+            print(f"[BANK] Bank draw failed for game {game_id}, falling through to AI: {e}")
+            # Postgres leaves a transaction aborted after a failed statement;
+            # reusing this session without rolling back would fail everything
+            # below with a confusing secondary error.
+            await db.rollback()
 
+        try:
             # Fetch recent questions for same topic+difficulty to avoid repeats
             from sqlalchemy import select, desc
             from app.models import Question as QuestionModel, Game as GameModel
@@ -67,28 +94,30 @@ async def create_ai_questions(game_id: str, category: str, difficulty: int, coun
                 print(f"Excluding {len(exclude_questions)} previously asked questions")
 
             questions = await generate_questions(category, difficulty, count, topics, exclude_questions)
-            await _store_questions(db, game_id, questions)
-            print(f"Generated {len(questions)} AI questions for game {game_id}")
+            await _store_questions(
+                db, game_id, questions, category=category, difficulty=difficulty
+            )
+            print(f"[AI-GEN] Generated {len(questions)} AI questions for game {game_id}")
         except Exception as e:
-            print(f"AI question generation failed: {e}")
-            await seed_fallback_questions(db, game_id, category, difficulty, count)
+            print(f"[AI-GEN] AI question generation failed for game {game_id}: {e}")
+            try:
+                await db.rollback()
+                await seed_fallback_questions(db, game_id, category, difficulty, count)
+            except Exception as fallback_error:
+                # This runs inside a BackgroundTask, where an escaping
+                # exception is swallowed and the game is left with no
+                # questions and no explanation. Say so instead.
+                print(
+                    f"[FALLBACK] Could not seed fallback questions for game "
+                    f"{game_id}: {fallback_error}"
+                )
 
 async def seed_fallback_questions(db, game_id: str, category: str, difficulty: int, count: int):
-    from app.services.ai_service import CATEGORY_PROMPTS
+    """Last resort: a small hardcoded set, so a game is never left empty."""
     fallback = FALLBACK_QUESTIONS.get(category, FALLBACK_QUESTIONS["anime"])
-    for i, q in enumerate(fallback[:count]):
-        question = Question(
-            game_id=game_id,
-            text=q["text"],
-            options=q["options"],
-            correct_answer=q["correct_answer"],
-            difficulty=difficulty,
-            category=category,
-            order_index=i,
-        )
-        db.add(question)
-    await db.commit()
-    print(f"Seeded {min(len(fallback), count)} fallback questions for game {game_id}")
+    chosen = fallback[:count]
+    await _store_questions(db, game_id, chosen, category=category, difficulty=difficulty)
+    print(f"[FALLBACK] Seeded {len(chosen)} fallback questions for game {game_id}")
 
 FALLBACK_QUESTIONS = {
     "anime": [

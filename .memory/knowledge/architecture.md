@@ -26,7 +26,7 @@ WS     Client → /api/games/{code}/ws → ConnectionManager.rooms{code: [socket
 | Question generation, commentary, fallbacks | `app/routers/questions.py` |
 | TMDB/Jikan title autocomplete proxy | `app/routers/search.py` |
 | Anthropic prompts + generation loop | `app/services/ai_service.py` |
-| Free-tier bank matching/drawing (UNWIRED) | `app/services/question_bank_service.py` |
+| Free-tier bank matching/drawing | `app/services/question_bank_service.py` |
 | In-process socket rooms | `app/websocket/manager.py` |
 
 ## Data model
@@ -45,6 +45,12 @@ timer. The client POSTs `/api/games/{code}/question/{index}` to advance; the
 server persists the index and broadcasts. The WebSocket endpoint in `main.py` is
 a dumb relay that re-broadcasts what clients send — the REST endpoints are the
 source of truth. Moving the loop server-side is a redesign, not a refactor.
+
+## Question sources
+
+`create_ai_questions` (a background task) tries the bank first via `try_bank()`,
+then live AI generation, then a hardcoded fallback. See gotchas.md for the
+all-or-nothing rule and the category invariant.
 
 ## External services
 
