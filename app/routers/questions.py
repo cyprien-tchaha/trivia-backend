@@ -91,7 +91,7 @@ async def create_ai_questions(game_id: str, category: str, difficulty: int, coun
             exclude_questions = [row[0] for row in recent_result.fetchall()]
 
             if exclude_questions:
-                print(f"Excluding {len(exclude_questions)} previously asked questions")
+                print(f"[AI-GEN] Excluding {len(exclude_questions)} previously asked questions")
 
             questions = await generate_questions(category, difficulty, count, topics, exclude_questions)
             await _store_questions(

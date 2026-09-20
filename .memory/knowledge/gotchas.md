@@ -81,6 +81,12 @@ Things that look wrong but are deliberate, and things that are genuinely wrong.
 
 ## Conventions that bite
 
+- **`await db.rollback()` expires every ORM object in the session**, regardless
+  of `expire_on_commit=False`. Touching an attribute on one afterwards triggers
+  a lazy refresh, which raises `MissingGreenlet` in async code. Bites when a
+  test shares one session across a rollback boundary — read the ids you need
+  before the call. Production is unaffected: `create_ai_questions` owns its own
+  session and only ever holds `game_id` as a string.
 - **Always `code.upper()`** before comparing a game code or using it as a room key.
 - **Async all the way down** — every handler `async def`, every DB call awaited.
   A sync session will deadlock the loop.
