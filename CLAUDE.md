@@ -13,13 +13,14 @@ update live over a WebSocket.
 | ORM | SQLAlchemy 2.0, **async** (`AsyncSession` + asyncpg) |
 | Validation | Pydantic v2 |
 | Database | PostgreSQL |
-| Realtime | FastAPI WebSockets, in-process connection manager |
+| Realtime | FastAPI WebSockets + Redis pub/sub fanout across instances |
 | AI | Anthropic SDK (`AsyncAnthropic`) |
 | External APIs | TMDB (movies/TV), Jikan (anime) |
 | Deploy | Railway (nixpacks) |
 
-`redis`, `openai` and `alembic` are in `requirements.txt` but **unused** — no
-code imports them. Don't assume Redis is available; there is no cache layer.
+`openai` and `alembic` are in `requirements.txt` but **unused** — no code
+imports them. `redis` backs WebSocket fanout (see below); it is not a cache,
+and nothing else uses it.
 
 ## Commands
 
@@ -53,7 +54,8 @@ There is **no test suite and no test runner.** See "Known gaps" below.
 |---|---|---|
 | `DATABASE_URL` | yes | `app/database.py` |
 | `ANTHROPIC_API_KEY` | yes | `app/services/ai_service.py` |
-| `TMDB_API_KEY` | no | `app/routers/search.py` (movies/TV autocomplete; anime uses Jikan, no key) |
+| `TMDB_API_KEY` | no | `app/routers/search.py` (all three categories; anime is filtered out of TMDB by genre + language) |
+| `REDIS_URL` | no | `app/websocket/manager.py`. Unset means single-instance mode: broadcasts stay in-process and the service **must not** be scaled past one replica. |
 
 `app/database.py` rewrites `postgresql://` and `postgres://` to
 `postgresql+asyncpg://` because Railway hands out the sync form.
@@ -70,7 +72,8 @@ HTTP   Client → main.py → app/routers/{games,questions,search}.py
                               → Anthropic / TMDB / Jikan
 
 WS     Client → /api/games/{code}/ws → ConnectionManager.rooms{code: [sockets]}
-                → broadcast to everyone in the room
+                → broadcast publishes to Redis → every instance's subscriber
+                → each delivers to its own local sockets
 ```
 
 **Data model:** `Game` (6-char `code`, `status` lobby→active→finished,
@@ -87,6 +90,15 @@ Postgres `uuid`.
   server-side timer. Clients POST `/api/games/{code}/question/{index}` to
   advance, and the server only persists the index and broadcasts. Moving the
   loop server-side is a real redesign, not a refactor.
+- **Broadcasts go through Redis, never straight to local sockets.** A socket
+  lives in one process, so writing locally reaches only the players who share
+  a process with the publisher — which capped the service at one instance.
+  `broadcast()` publishes and the subscriber delivers, on every instance
+  including the publisher's, so nobody gets an event twice. With no
+  `REDIS_URL`, or Redis down, it falls back to local delivery: correct for one
+  instance and better than a game that stops working because the cache is
+  down. `GET /health` reports `ws_fanout` so a misconfigured `REDIS_URL`
+  doesn't silently re-impose the one-instance cap.
 - **The WebSocket endpoint is a dumb relay.** `main.py` re-broadcasts what
   clients send, with light per-event shaping. It is not the source of truth —
   the REST endpoints are.

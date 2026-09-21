@@ -387,7 +387,10 @@ async def admin_game_status(code: str, db: AsyncSession = Depends(get_db)):
     result = await db.execute(select(Player).where(Player.game_id == game.id))
     players = result.scalars().all()
 
-    ws_connections = len(manager.rooms.get(code.upper(), []))
+    # Local to this instance. With Redis fanout on, a room can have members
+    # on other instances that this count cannot see, so treat it as a floor
+    # rather than the room size.
+    ws_connections = manager.local_connections(code.upper())
 
     return {
         "game": {

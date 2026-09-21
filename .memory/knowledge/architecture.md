@@ -11,7 +11,8 @@ HTTP   Client → main.py → app/routers/{games,questions,search}.py
                               → Anthropic / TMDB / Jikan
 
 WS     Client → /api/games/{code}/ws → ConnectionManager.rooms{code: [sockets]}
-                → broadcast to the room
+                → broadcast → Redis pub/sub → every instance's subscriber
+                → each writes to its own local sockets
 ```
 
 ## Where things live
@@ -27,7 +28,7 @@ WS     Client → /api/games/{code}/ws → ConnectionManager.rooms{code: [socket
 | TMDB/Jikan title autocomplete proxy | `app/routers/search.py` |
 | Anthropic prompts + generation loop | `app/services/ai_service.py` |
 | Free-tier bank matching/drawing | `app/services/question_bank_service.py` |
-| In-process socket rooms | `app/websocket/manager.py` |
+| Socket rooms + Redis fanout | `app/websocket/manager.py` |
 
 ## Data model
 

@@ -1,11 +1,25 @@
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from app.routers import games, questions, search
 from app.websocket.manager import manager
 import uvicorn
-import os 
+import os
 
-app = FastAPI(title="Trivia API", version="0.1.0")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Bring up Redis fanout so WebSocket broadcasts reach players connected to
+    # other instances. Never raises: with no REDIS_URL, or Redis down, the
+    # manager falls back to local delivery and the app starts either way.
+    await manager.start()
+    try:
+        yield
+    finally:
+        await manager.stop()
+
+
+app = FastAPI(title="Trivia API", version="0.1.0", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -21,7 +35,13 @@ app.include_router(search.router, prefix="/api/search", tags=["search"])
 
 @app.get("/health")
 async def health():
-    return {"status": "ok", "environment": "development"}
+    return {
+        "status": "ok",
+        "environment": os.getenv("ENVIRONMENT", "development"),
+        # False means broadcasts are staying in this process, so the service
+        # must not be scaled past one instance.
+        "ws_fanout": manager.fanout_active,
+    }
 
 @app.websocket("/api/games/{code}/ws")
 async def websocket_endpoint(websocket: WebSocket, code: str):
@@ -47,8 +67,10 @@ async def websocket_endpoint(websocket: WebSocket, code: str):
                     "answer": data.get("answer")
                 })
             elif event == "next_question":
-                room = manager.rooms.get(code.upper(), [])
-                print(f"[WS-BCAST] next_question idx={data.get('question_index')} room_size={len(room)}")
+                print(
+                    f"[WS-BCAST] next_question idx={data.get('question_index')} "
+                    f"local_room_size={manager.local_connections(code.upper())}"
+                )
                 await manager.broadcast(code.upper(), {
                     "event": "next_question",
                     "question_index": data.get("question_index")

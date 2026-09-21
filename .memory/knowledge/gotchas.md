@@ -79,6 +79,28 @@ Things that look wrong but are deliberate, and things that are genuinely wrong.
   game. Merging them would report a bank fault as an AI fault, sending whoever
   reads the log to the wrong file.
 
+## WebSocket fanout
+
+- **`rooms` is per-process and always will be.** A socket belongs to one
+  server process; it cannot be shared. Fanout works by publishing the message
+  and letting each instance write to its own sockets.
+- **`broadcast()` does not deliver locally when fanout is on.** Delivery
+  happens only in the subscriber, including on the instance that published.
+  Adding a local write "to be safe" double-sends to that instance's clients.
+- **One channel for all games**, filtered by code on receive. A channel per
+  game would cut idle traffic but means subscribing/unsubscribing as rooms
+  churn, which races against reconnects. Revisit only if broadcast volume
+  becomes the bottleneck.
+- **`local_connections()` is a floor, not the room size.** With fanout on, a
+  room has members on other instances this count cannot see. `/{code}/admin`
+  reports it as-is.
+- **Redis going down degrades, it does not break.** The listener retries with
+  backoff, `fanout_active` flips false, and broadcasts deliver locally — so a
+  single-instance deployment keeps playing. Verified by killing redis
+  mid-game. Don't "simplify" that fallback away.
+- **`GET /health` reports `ws_fanout`.** False in production means broadcasts
+  are staying in-process and the service must not run more than one replica.
+
 ## Conventions that bite
 
 - **`await db.rollback()` expires every ORM object in the session**, regardless
