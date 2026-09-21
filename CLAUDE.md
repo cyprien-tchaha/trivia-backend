@@ -161,6 +161,19 @@ Postgres `uuid`.
   instance and better than a game that stops working because the cache is
   down. `GET /health` reports `ws_fanout` so a misconfigured `REDIS_URL`
   doesn't silently re-impose the one-instance cap.
+- **Startup applies `migrate.py` before serving.** The deploy start command is
+  `uvicorn main:app`, so nothing else ran it: the accounts release shipped code
+  selecting `games.user_id` against a database that had no such column, and
+  every game creation answered 500 while the clock failed on every tick. A
+  failed migration logs and still serves rather than crash-looping, because a
+  crash loop takes `/health` — where the reason is legible — down with it.
+  `/health` reports `migrations`.
+- **Unhandled errors are converted to a 500 inside the CORS layer.** Starlette's
+  own error handler sits outside `CORSMiddleware`, so a crash returns no
+  `Access-Control-Allow-Origin` and the browser reports a CORS failure —
+  hiding both the status and the cause. The middleware in `main.py` is
+  registered *before* `CORSMiddleware` precisely so CORS wraps it (Starlette
+  puts the most recently added middleware outermost). Don't reorder them.
 - **The WebSocket endpoint is a dumb relay.** `main.py` re-broadcasts what
   clients send, with light per-event shaping. It is not the source of truth —
   the REST endpoints are.
@@ -232,7 +245,8 @@ Real, and worth knowing before you touch nearby code:
 - **`app/services/game_service.py` is an empty file.**
 - **Migrations are hand-written SQL** in `migrate.py`, applied top to bottom on
   every run via `IF NOT EXISTS`. Alembic is installed but not initialised. Add
-  new DDL to that list, idempotently.
+  new DDL to that list, idempotently — startup runs it, so a statement that is
+  not idempotent breaks every boot, not just one command.
 - **`/{code}/admin`, `/{code}/reset` and `/{code}/players/{id}/remove` have no
   authentication** — anyone holding a game code can reset a live game. Now
   that `Game.user_id` exists these could be restricted to the owning host.

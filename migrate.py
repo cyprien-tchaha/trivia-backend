@@ -86,10 +86,18 @@ MIGRATIONS = [
 
 
 async def migrate():
+    """
+    Apply every statement, top to bottom. All of them are idempotent
+    (IF NOT EXISTS / IF EXISTS), so running this twice is a no-op and running
+    it on every boot is safe.
+    """
     async with engine.begin() as conn:
         for sql in MIGRATIONS:
             await conn.execute(text(sql))
-    print("Migration complete.")
+    print("[MIGRATE] schema up to date")
 
 
-asyncio.run(migrate())
+# Guarded: main.py imports this module to run the same list at startup, and a
+# module-level asyncio.run() would fire on import, inside the running loop.
+if __name__ == "__main__":
+    asyncio.run(migrate())

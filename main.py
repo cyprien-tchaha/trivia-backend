@@ -1,16 +1,44 @@
 from contextlib import asynccontextmanager
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from app.routers import auth, games, questions, search
 from app.websocket.manager import manager
 from app import game_loop
 import asyncio
+import traceback
 import uvicorn
 import os
+
+#: Set by startup so /health can report whether the schema is actually current.
+MIGRATION_STATUS = "not run"
+
+
+async def apply_migrations() -> None:
+    """
+    Bring the schema up to date before serving.
+
+    The deploy start command is `uvicorn main:app`, so nothing else runs
+    migrate.py — a release that added a column shipped code querying a column
+    the database did not have, and every request touching that table answered
+    500. The statements are idempotent, so this is a no-op on an up-to-date
+    database.
+    """
+    from migrate import migrate
+    await migrate()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    global MIGRATION_STATUS
+    try:
+        await apply_migrations()
+        MIGRATION_STATUS = "ok"
+    except Exception as exc:
+        # Don't refuse to boot: a crash loop takes /health down with it, and
+        # /health is where the reason is legible. Serve, and say so there.
+        MIGRATION_STATUS = f"failed: {type(exc).__name__}: {exc}"
+        print(f"[MIGRATE] FAILED — schema may be stale: {exc}")
     # Bring up Redis fanout so WebSocket broadcasts reach players connected to
     # other instances. Never raises: with no REDIS_URL, or Redis down, the
     # manager falls back to local delivery and the app starts either way.
@@ -107,6 +135,28 @@ def _cors_config() -> dict:
 CORS = _cors_config()
 
 
+@app.middleware("http")
+async def unhandled_errors_are_still_cors_responses(request: Request, call_next):
+    """
+    Turn an unhandled exception into a normal 500 response.
+
+    Starlette's own error handler sits *outside* CORSMiddleware, so a crash
+    comes back with no Access-Control-Allow-Origin — the browser then reports
+    a CORS failure and hides both the status code and the cause. Handling it
+    here, inside the CORS layer, means a server error reads as a server error.
+    """
+    try:
+        return await call_next(request)
+    except Exception as exc:
+        print(f"[ERROR] {request.method} {request.url.path}: {exc!r}")
+        traceback.print_exc()
+        return JSONResponse(
+            status_code=500,
+            content={"detail": f"{type(exc).__name__}: {exc}"},
+        )
+
+
+# Added last, so CORS wraps the handler above and its 500s carry the headers.
 app.add_middleware(
     CORSMiddleware,
     allow_methods=["*"],
@@ -133,6 +183,9 @@ async def health():
         # through a deploy log that has already scrolled away.
         "cors_origins": CORS["allow_origins"],
         "cors_credentials": CORS["allow_credentials"],
+        # "ok" once startup has applied migrate.py. Anything else means the
+        # schema may not match the code that is running.
+        "migrations": MIGRATION_STATUS,
     }
 
 @app.websocket("/api/games/{code}/ws")
