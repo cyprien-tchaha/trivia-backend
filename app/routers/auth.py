@@ -163,8 +163,15 @@ async def google_callback(
         issue_session(user),
         max_age=60 * 60 * 24 * 30,
         httponly=True,            # not readable by page scripts
-        secure=True,              # only over HTTPS
-        samesite="lax",           # survives the redirect back from Google
+        # HTTPS only. Overridable purely so local development over http can
+        # hold a session — it defaults to secure and production must never
+        # set this, or the session travels in clear text.
+        secure=os.getenv("SESSION_COOKIE_SECURE", "true").lower() != "false",
+        # "lax" survives the redirect back from Google and is sent on XHR
+        # between playfanatic.gg and api.playfanatic.gg, because SameSite is
+        # about the registrable domain, not the origin. Move the frontend to a
+        # different domain (vercel.app, say) and this must become "none".
+        samesite=os.getenv("SESSION_COOKIE_SAMESITE", "lax"),
         path="/",
     )
     return response

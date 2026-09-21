@@ -179,3 +179,14 @@ async def test_a_game_created_anonymously_still_works(client, db):
     assert r.json()["hosted_by"] is None
     game = (await db.execute(select(Game))).scalar_one()
     assert game.user_id is None
+
+
+async def test_the_session_cookie_is_secure_by_default(client, monkeypatch):
+    """Secure must be the default. A session cookie sent over plain HTTP is
+    readable by anyone on the network."""
+    monkeypatch.delenv("SESSION_COOKIE_SECURE", raising=False)
+    stub_google(monkeypatch)
+    async with client as c:
+        r = await c.get("/api/auth/google/callback",
+                        params={"code": "abc", "state": auth_router._issue_state()})
+    assert "Secure" in r.headers.get("set-cookie", "")

@@ -59,7 +59,10 @@ pytest                      # 120 tests; needs a local redis for the fanout suit
 | `DATABASE_URL` | yes | `app/database.py` |
 | `SECRET_KEY` | yes (for auth) | `app/auth.py`. Signs host sessions. Absent, signing **refuses** rather than falling back to a default — a predictable key lets anyone mint a session for any account. |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` / `GOOGLE_REDIRECT_URI` | for sign-in | `app/routers/auth.py`. Without them `/api/auth/google/*` returns 503 and everything else still works. |
-| `FRONTEND_URL` | for sign-in | Where the OAuth callback sends the host back to. |
+| `FRONTEND_URL` | for sign-in | Where the OAuth callback sends the host back to, **and** the CORS origin. Setting it switches CORS from open/credential-less to origin-specific with credentials — which is what lets the session cookie travel at all. |
+| `ALLOWED_ORIGINS` | no | Extra comma-separated CORS origins alongside `FRONTEND_URL`. |
+| `SESSION_COOKIE_SECURE` | no | Defaults **true**. Set `false` only for local http development; production must never set it or sessions travel in clear text. |
+| `SESSION_COOKIE_SAMESITE` | no | Defaults `lax`, which works because playfanatic.gg and api.playfanatic.gg share a registrable domain. Move the frontend to another domain and this must become `none`. |
 | `ENFORCE_ENTITLEMENTS` | no | `app/entitlements.py`, **default off**. See the entitlements note below. Do not turn on before billing ships. |
 | `ANTHROPIC_API_KEY` | yes | `app/services/ai_service.py` |
 | `TMDB_API_KEY` | no | `app/routers/search.py` (all three categories; anime is filtered out of TMDB by genre + language) |
@@ -111,6 +114,13 @@ Postgres `uuid`.
   calls the same `match_bank_topic()` the generator uses to decide bank vs
   AI — so what we charge for and what actually costs us cannot drift apart.
   There is a test asserting they agree.
+- **CORS is credentialed and origin-specific once `FRONTEND_URL` is set.** The
+  spec forbids `Access-Control-Allow-Credentials: true` alongside a wildcard
+  origin and browsers enforce it, so the old `allow_origins=["*"]` meant the
+  session cookie was never sent and `/api/auth/me` could only answer 401. With
+  `FRONTEND_URL` unset it falls back to the previous open, credential-less
+  policy so nothing breaks before sign-in is configured. Localhost origins are
+  added outside production only.
 - **Users are matched on Google's `sub`, never on email.** An email can be
   changed or reassigned; matching on it is how one person ends up inside
   another person's account.
@@ -218,9 +228,9 @@ Real, and worth knowing before you touch nearby code:
 - **Migrations are hand-written SQL** in `migrate.py`, applied top to bottom on
   every run via `IF NOT EXISTS`. Alembic is installed but not initialised. Add
   new DDL to that list, idempotently.
-- **CORS is `allow_origins=["*"]`**, and `/{code}/admin`, `/{code}/reset` and
-  `/{code}/players/{id}/remove` have no authentication — anyone holding a game
-  code can reset a live game.
+- **`/{code}/admin`, `/{code}/reset` and `/{code}/players/{id}/remove` have no
+  authentication** — anyone holding a game code can reset a live game. Now
+  that `Game.user_id` exists these could be restricted to the owning host.
 
 ## Git
 
