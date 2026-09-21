@@ -3,6 +3,8 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from app.routers import games, questions, search
 from app.websocket.manager import manager
+from app import game_loop
+import asyncio
 import uvicorn
 import os
 
@@ -13,9 +15,18 @@ async def lifespan(app: FastAPI):
     # other instances. Never raises: with no REDIS_URL, or Redis down, the
     # manager falls back to local delivery and the app starts either way.
     await manager.start()
+    # The server clock. Every instance ticks; a claim per transition means the
+    # work happens once. Without it a game freezes the moment the host's tab
+    # goes away.
+    clock = asyncio.create_task(game_loop.run())
     try:
         yield
     finally:
+        clock.cancel()
+        try:
+            await clock
+        except (asyncio.CancelledError, Exception):
+            pass
         await manager.stop()
 
 

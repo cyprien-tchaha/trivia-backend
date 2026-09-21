@@ -41,11 +41,23 @@ IDs are `String` UUIDs generated in Python via `gen_uuid()`, not native Postgres
 
 ## Game loop ownership
 
-**The host client drives the loop, not the server.** There is no server-side
-timer. The client POSTs `/api/games/{code}/question/{index}` to advance; the
-server persists the index and broadcasts. The WebSocket endpoint in `main.py` is
-a dumb relay that re-broadcasts what clients send — the REST endpoints are the
-source of truth. Moving the loop server-side is a redesign, not a refactor.
+**The server drives the loop** (`app/game_loop.py`), and the host's controls
+are an override rather than the mechanism.
+
+Every instance ticks once a second, selects active games whose `phase_ends_at`
+has passed, and moves them along: question → result → next question →
+finished. Which instance acts is decided by `manager.claim_once()` keyed on
+`(game, phase, index)`, so a move happens exactly once no matter how many
+instances tick together.
+
+The host POSTing `/api/games/{code}/question/{index}` still advances the game
+and simply beats the clock to that transition, so the existing frontend needs
+no change. A game with `phase_ends_at IS NULL` is ignored by the clock and
+stays host-driven — that is how games in flight during the deploy were left
+alone.
+
+The WebSocket endpoint in `main.py` is still a dumb relay for client-sent
+events; the REST endpoints and the clock are the source of truth.
 
 ## Question sources
 

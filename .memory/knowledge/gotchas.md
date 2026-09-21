@@ -79,6 +79,28 @@ Things that look wrong but are deliberate, and things that are genuinely wrong.
   game. Merging them would report a bank fault as an AI fault, sending whoever
   reads the log to the wrong file.
 
+## Server game clock
+
+- **Every instance ticks; a claim decides who acts.** `claim_once()` keys on
+  `(game, phase, index)`, so the same transition cannot fire twice even with
+  every instance ticking in the same second. Verified with two instances: the
+  work distributed across both and the question index never skipped.
+- **A failed claim (Redis error) returns True, deliberately.** Allowing the
+  transition risks a duplicate advance; blocking it risks the game never
+  advancing. A duplicate is recoverable, a freeze is the bug the clock exists
+  to prevent.
+- **`phase_ends_at IS NULL` means hands off.** That is how games in flight
+  during the deploy stay host-driven. Don't backfill it.
+- **`/answer` flips the phase itself when everyone has answered**, rather than
+  shortening the deadline, so the reveal is immediate. The clock's own
+  question→result claim for that index then no-ops. Verified: advances in
+  ~2.3s with RESULT_SECONDS=2 instead of waiting out the question.
+- **The host's `/question/{index}` resets the deadline.** Without that the old
+  deadline fires immediately after the host's manual advance and double-skips.
+- **The client still runs its own countdown.** It is display only; the server
+  deadline is authoritative. They can drift, which is harmless because the
+  server is the backstop, but don't assume the client's number is the truth.
+
 ## WebSocket fanout
 
 - **`rooms` is per-process and always will be.** A socket belongs to one

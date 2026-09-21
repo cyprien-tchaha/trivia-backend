@@ -165,6 +165,41 @@ class ConnectionManager:
     async def send_personal(self, websocket: WebSocket, message: dict) -> None:
         await websocket.send_text(json.dumps(message))
 
+    # ----------------------------------------------------------- claims
+
+    async def claim_once(self, key: str, ttl_seconds: int = 30) -> bool:
+        """
+        Try to claim `key`. True for exactly one caller across all instances
+        until the TTL expires.
+
+        This is how the game loop avoids advancing a question once per
+        instance: the key names a specific transition, so "move game X out of
+        question 3" can only succeed once no matter how many instances tick at
+        the same moment, or how often. A crash mid-transition costs one TTL
+        before another instance retries, rather than wedging the game.
+
+        It lives on the connection manager because this is the only thing that
+        owns a Redis connection; a second pool for one SETNX is not worth it.
+
+        With no Redis, this always returns True. That is correct, because no
+        Redis also means one instance — the same assumption broadcast()
+        already falls back on. Running multiple instances without REDIS_URL
+        was already unsupported and /health reports it.
+        """
+        if not self.fanout_active:
+            return True
+        try:
+            # SET key 1 NX EX ttl — atomic, so exactly one caller wins.
+            won = await self._redis.set(key, "1", nx=True, ex=ttl_seconds)
+            return bool(won)
+        except Exception as e:
+            # Don't wedge the game on a Redis blip. Allowing the transition
+            # risks a duplicate advance across instances; blocking it risks
+            # the game never advancing at all. A duplicate is recoverable and
+            # a freeze is what this whole change exists to prevent.
+            print(f"[CLOCK] claim failed for {key} ({type(e).__name__}: {e}); allowing")
+            return True
+
     # ------------------------------------------------------------ subscriber
 
     async def _listen(self) -> None:

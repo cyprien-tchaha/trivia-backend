@@ -5,6 +5,7 @@ from app.database import get_db
 from app.models import Game, Player, Question, Answer
 from app.schemas import CreateGameRequest, JoinGameRequest
 from app.websocket.manager import manager
+from app.game_loop import question_deadline, result_deadline
 import random, string, asyncio
 
 router = APIRouter()
@@ -104,6 +105,10 @@ async def start_game(code: str, db: AsyncSession = Depends(get_db)):
     if not game:
         raise HTTPException(status_code=404, detail="Game not found")
     game.status = "active"
+    # From here the server clock owns advancement; the host's controls still
+    # work and simply beat the clock to each transition.
+    game.phase = "question"
+    game.phase_ends_at = question_deadline()
     await db.commit()
     await manager.broadcast(code.upper(), {"event": "game_started"})
     return {"status": "started"}
@@ -115,6 +120,7 @@ async def finish_game(code: str, db: AsyncSession = Depends(get_db)):
     if not game:
         raise HTTPException(status_code=404, detail="Game not found")
     game.status = "finished"
+    game.phase_ends_at = None
     await db.commit()
     result = await db.execute(select(Player).where(Player.game_id == game.id))
     players = result.scalars().all()
@@ -218,6 +224,15 @@ async def submit_answer(code: str, req: dict, db: AsyncSession = Depends(get_db)
             "correct_count": correct_count,
             "question_id": question.id,
         })
+        # Nobody is left to wait for, so stop holding the question open: move
+        # the game into the result phase and let the clock take it from there.
+        # Done here rather than by shortening the deadline so the reveal is
+        # immediate, and the clock's own question->result claim for this index
+        # becomes a no-op.
+        if game.phase != "result":
+            game.phase = "result"
+            game.phase_ends_at = result_deadline()
+            await db.commit()
 
     return {"correct": correct, "score": player.score, "correct_answer": question.correct_answer}
 
@@ -232,6 +247,10 @@ async def set_question_index(code: str, index: int, db: AsyncSession = Depends(g
         manager.answer_counts[old_key] = 0
     print(f"[ADVANCE] {code.upper()} {game.current_question_index} -> {index}")
     game.current_question_index = index
+    # The host moved first, so restart the clock on the new question rather
+    # than letting the old deadline fire immediately afterwards.
+    game.phase = "question"
+    game.phase_ends_at = question_deadline()
     await db.commit()
     return {"status": "ok", "current_question_index": index}
 
@@ -247,6 +266,8 @@ async def reset_game(code: str, db: AsyncSession = Depends(get_db)):
 
     game.status = "active"
     game.current_question_index = 0
+    game.phase = "question"
+    game.phase_ends_at = question_deadline()
     await db.commit()
 
     result = await db.execute(select(Player).where(Player.game_id == game.id))

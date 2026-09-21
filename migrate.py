@@ -37,6 +37,25 @@ MIGRATIONS = [
     CREATE UNIQUE INDEX IF NOT EXISTS uq_question_bank_topic_text
     ON question_bank (topic, text);
     """,
+
+    # Server-side game clock. Nullable with no backfill on purpose: an
+    # in-flight game gets a null deadline, the loop ignores it, and the host
+    # keeps driving it to the end. Only games started after this deploy are
+    # server-driven.
+    """
+    ALTER TABLE games
+    ADD COLUMN IF NOT EXISTS phase VARCHAR DEFAULT 'question';
+    """,
+    """
+    ALTER TABLE games
+    ADD COLUMN IF NOT EXISTS phase_ends_at TIMESTAMP WITH TIME ZONE DEFAULT NULL;
+    """,
+    # The loop polls on exactly this predicate every tick.
+    """
+    CREATE INDEX IF NOT EXISTS ix_games_active_deadline
+    ON games (status, phase_ends_at)
+    WHERE status = 'active';
+    """,
 ]
 
 

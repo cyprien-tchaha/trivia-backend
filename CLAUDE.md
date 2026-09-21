@@ -55,6 +55,9 @@ There is **no test suite and no test runner.** See "Known gaps" below.
 | `DATABASE_URL` | yes | `app/database.py` |
 | `ANTHROPIC_API_KEY` | yes | `app/services/ai_service.py` |
 | `TMDB_API_KEY` | no | `app/routers/search.py` (all three categories; anime is filtered out of TMDB by genre + language) |
+| `QUESTION_SECONDS` | no | `app/game_loop.py`, default 60. Matches the countdown the client renders. |
+| `RESULT_SECONDS` | no | `app/game_loop.py`, default 8. How long the answer reveal holds. |
+| `GAME_TICK_SECONDS` | no | `app/game_loop.py`, default 1.0. Bounds how late a transition can be. |
 | `REDIS_URL` | no | `app/websocket/manager.py`. Unset means single-instance mode: broadcasts stay in-process and the service **must not** be scaled past one replica. |
 
 `app/database.py` rewrites `postgresql://` and `postgres://` to
@@ -77,7 +80,7 @@ WS     Client → /api/games/{code}/ws → ConnectionManager.rooms{code: [socket
 ```
 
 **Data model:** `Game` (6-char `code`, `status` lobby→active→finished,
-`current_question_index`) owns `Player`, `Question` and `Answer`. `QuestionBank`
+`current_question_index`, plus `phase`/`phase_ends_at` for the server clock) owns `Player`, `Question` and `Answer`. `QuestionBank`
 is standalone — pre-generated rows keyed by `(topic, difficulty)`, copied into
 `Question` rows when a game draws from it.
 
@@ -86,10 +89,22 @@ Postgres `uuid`.
 
 ## Design decisions that are deliberate — don't "fix" these
 
-- **The host client drives the game loop, not the server.** There is no
-  server-side timer. Clients POST `/api/games/{code}/question/{index}` to
-  advance, and the server only persists the index and broadcasts. Moving the
-  loop server-side is a real redesign, not a refactor.
+- **The server owns the game clock; the host's controls are an override.**
+  `app/game_loop.py` ticks once a second on every instance, finds active games
+  whose `phase_ends_at` has passed, and moves them on — question → result →
+  next question → finished. The host POSTing
+  `/api/games/{code}/question/{index}` still works and simply beats the clock
+  to that transition. This replaced a purely host-driven loop where closing
+  the host's tab froze the game permanently for everyone else.
+- **Transitions are coordinated by a claim, not a leader.** Every instance
+  ticks, and `manager.claim_once()` keys on `(game, phase, index)` — so a
+  given move happens exactly once however many instances try it. There is no
+  leader to elect and no split-brain; a crash mid-transition costs one TTL
+  before another instance retries. Don't replace this with leader election.
+- **A null `phase_ends_at` means the clock leaves the game alone.** Games
+  already in flight when the clock shipped have no deadline and stay
+  host-driven to the end, rather than having a timer appear under their
+  players. `/start` and `/reset` set the deadline; `/finish` clears it.
 - **Broadcasts go through Redis, never straight to local sockets.** A socket
   lives in one process, so writing locally reaches only the players who share
   a process with the publisher — which capped the service at one instance.

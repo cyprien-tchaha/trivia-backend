@@ -19,6 +19,13 @@ class Game(Base):
     topics                 = Column(String, default="")
     question_count         = Column(Integer, default=10)
     current_question_index = Column(Integer, default=0)
+    # Server-owned clock. `phase` is "question" or "result"; `phase_ends_at`
+    # is when the server should move the game on. Null means no server
+    # deadline — a game created before this column existed, or one still in
+    # the lobby — and the loop leaves those alone so the host stays in
+    # control of them.
+    phase                  = Column(String, default="question")
+    phase_ends_at          = Column(DateTime(timezone=True), nullable=True, default=None)
     created_at             = Column(DateTime(timezone=True), server_default=func.now())
 
 class Player(Base):
