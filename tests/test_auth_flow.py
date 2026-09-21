@@ -190,3 +190,23 @@ async def test_the_session_cookie_is_secure_by_default(client, monkeypatch):
         r = await c.get("/api/auth/google/callback",
                         params={"code": "abc", "state": auth_router._issue_state()})
     assert "Secure" in r.headers.get("set-cookie", "")
+
+
+async def test_config_reports_whether_sign_in_is_available(client, monkeypatch):
+    async with client as c:
+        assert (await c.get("/api/auth/config")).json()["google_enabled"] is True
+    monkeypatch.delenv("GOOGLE_CLIENT_ID", raising=False)
+    import httpx as _httpx
+    async with _httpx.AsyncClient(
+        transport=_httpx.ASGITransport(app=__import__("main").app), base_url="http://t"
+    ) as c:
+        assert (await c.get("/api/auth/config")).json()["google_enabled"] is False
+
+
+async def test_start_without_credentials_sends_the_host_back_not_to_json(client, monkeypatch):
+    """A host clicking Sign in must never land on a raw JSON error page."""
+    monkeypatch.delenv("GOOGLE_CLIENT_ID", raising=False)
+    async with client as c:
+        r = await c.get("/api/auth/google/start")
+    assert r.status_code == 307
+    assert r.headers["location"] == "https://app.example.com/?error=signin_unavailable"

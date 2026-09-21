@@ -59,8 +59,34 @@ def _state_is_ours(state: str) -> bool:
     return payload.get("k") == "oauth-state"
 
 
+def google_configured() -> bool:
+    return all(os.getenv(k) for k in
+               ("GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "GOOGLE_REDIRECT_URI"))
+
+
+@router.get("/config")
+async def auth_config():
+    """
+    What the frontend needs to know before rendering a sign-in control.
+
+    Without this the UI offers a button that cannot work, and the host finds
+    out by being dropped on a JSON error page.
+    """
+    return {"google_enabled": google_configured()}
+
+
 @router.get("/google/start")
 async def google_start():
+    if not google_configured():
+        # A browser is following this link, so answer like a browser endpoint:
+        # send them back to the app with an error the UI can render, rather
+        # than a raw JSON 503 in the address bar.
+        frontend = os.getenv("FRONTEND_URL", "").rstrip("/")
+        print("[AUTH] sign-in attempted but Google credentials are not configured")
+        return RedirectResponse(
+            f"{frontend}/?error=signin_unavailable" if frontend else "/",
+            status_code=307,
+        )
     params = {
         "client_id": _cfg("GOOGLE_CLIENT_ID"),
         "redirect_uri": _cfg("GOOGLE_REDIRECT_URI"),
