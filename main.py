@@ -49,6 +49,18 @@ def _cors_config() -> dict:
     frontend = os.getenv("FRONTEND_URL", "").strip().rstrip("/")
     extra = [o.strip().rstrip("/") for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o.strip()]
     origins = [o for o in (frontend, *extra) if o]
+
+    # Accept the apex and www form of whatever was configured. A site served
+    # at www. with FRONTEND_URL set to the apex (or the reverse) would
+    # otherwise have every API call blocked, and the symptom — "couldn't
+    # create the game" with no HTTP response — points nowhere near CORS.
+    for origin in list(origins):
+        scheme, _, host = origin.partition("://")
+        if not host:
+            continue
+        twin = host[4:] if host.startswith("www.") else f"www.{host}"
+        origins.append(f"{scheme}://{twin}")
+
     if not origins:
         print("[CORS] FRONTEND_URL unset — open policy, no credentials, sign-in disabled")
         return {"allow_origins": ["*"], "allow_credentials": False}
