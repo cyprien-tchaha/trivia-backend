@@ -5,13 +5,35 @@ from app.database import get_db
 from app.models import Game, Player, Question, Answer
 from app.schemas import CreateGameRequest, JoinGameRequest
 from app.websocket.manager import manager
-from app.game_loop import question_deadline, result_deadline
+from app.game_loop import question_deadline, result_deadline, QUESTION_SECONDS
+from datetime import datetime, timezone
 import random, string, asyncio
 
 router = APIRouter()
 
 def gen_code(length=6):
     return ''.join(random.choices(string.ascii_uppercase, k=length))
+
+
+def clock_fields(game: Game) -> dict:
+    """
+    The server's view of the clock, for clients to render against.
+
+    `server_time` is here so a client can correct for its own clock being
+    wrong: a phone several minutes out would otherwise compute a nonsense
+    countdown from a perfectly correct deadline. The client takes the
+    difference once and applies it, instead of trusting Date.now().
+
+    `phase_ends_at` is null for games the clock doesn't drive (lobby, or
+    started before the server clock shipped); clients fall back to counting
+    locally for those.
+    """
+    return {
+        "phase": game.phase or "question",
+        "phase_ends_at": game.phase_ends_at.isoformat() if game.phase_ends_at else None,
+        "server_time": datetime.now(timezone.utc).isoformat(),
+        "question_seconds": QUESTION_SECONDS,
+    }
 
 @router.post("/create")
 async def create_game(req: CreateGameRequest, db: AsyncSession = Depends(get_db)):
@@ -96,6 +118,7 @@ async def get_game(code: str, db: AsyncSession = Depends(get_db)):
         "question_count": game.question_count,
         "topics": game.topics,
         "current_question_index": game.current_question_index,
+        **clock_fields(game),
     }
 
 @router.post("/{code}/start")
@@ -355,6 +378,9 @@ async def resume_game(code: str, player_id: str, db: AsyncSession = Depends(get_
         "correct": answered.correct if answered else None,
         "correct_answer": current_question.correct_answer if current_question else None,
         "question_id": current_question.id if current_question else None,
+        # Without these a reconnecting player restarts the countdown from full,
+        # so a refresh at 0:05 handed them another minute.
+        **clock_fields(game),
     }
 
 @router.post("/{code}/leave")
