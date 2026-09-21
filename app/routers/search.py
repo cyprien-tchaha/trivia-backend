@@ -33,9 +33,12 @@ _CACHE: dict[tuple[str, str], tuple[float, list[dict]]] = {}
 _CACHE_TTL_SECONDS = 300  # 5 minutes
 _CACHE_MAX_ENTRIES = 200
 
-# How long we wait on upstream before giving up. Keep this short — the user
-# is typing and a slow response is worse than no response.
-_HTTP_TIMEOUT_SECONDS = 3.0
+# How long we wait on upstream before giving up. This was 3s on the theory
+# that a slow response is worse than none while the user types. In practice
+# Jikan regularly takes longer than that, so the picker returned "No matches"
+# for every query and the host could not set a topic at all. A few seconds of
+# spinner beats a picker that never works.
+_HTTP_TIMEOUT_SECONDS = 8.0
 
 Category = Literal["anime", "tv_shows", "movies"]
 
@@ -63,6 +66,7 @@ def _cache_put(category: str, q: str, results: list[dict]) -> None:
 async def _search_tmdb(q: str, kind: str) -> list[dict]:
     """kind is 'tv' or 'movie' — TMDB has separate endpoints."""
     if not TMDB_API_KEY:
+        print("[SEARCH] tmdb skipped: TMDB_API_KEY is not set")
         # No key configured; nothing we can do. Soft-fail.
         return []
     url = f"{TMDB_BASE}/search/{kind}"
@@ -72,7 +76,8 @@ async def _search_tmdb(q: str, kind: str) -> list[dict]:
             r = await client.get(url, params=params)
             r.raise_for_status()
             data = r.json()
-    except (httpx.HTTPError, ValueError):
+    except (httpx.HTTPError, ValueError) as e:
+        print(f"[SEARCH] tmdb failed for q={q!r}: {type(e).__name__}: {e}")
         return []
 
     out: list[dict] = []
@@ -106,7 +111,11 @@ async def _search_jikan(q: str) -> list[dict]:
             r = await client.get(url, params=params)
             r.raise_for_status()
             data = r.json()
-    except (httpx.HTTPError, ValueError):
+    except (httpx.HTTPError, ValueError) as e:
+        # Soft-fail is deliberate (see the module docstring) but silent
+        # soft-fail is not: without this line an empty picker is
+        # indistinguishable from "no such anime".
+        print(f"[SEARCH] jikan failed for q={q!r}: {type(e).__name__}: {e}")
         return []
 
     out: list[dict] = []
