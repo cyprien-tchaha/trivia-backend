@@ -120,7 +120,12 @@ Postgres `uuid`.
   session cookie was never sent and `/api/auth/me` could only answer 401. With
   `FRONTEND_URL` unset it falls back to the previous open, credential-less
   policy so nothing breaks before sign-in is configured. Localhost origins are
-  added outside production only.
+  added outside production only. The configured value is normalised to the form
+  a browser actually sends (lowercase scheme+host, https assumed, path dropped)
+  because `playfanatic.gg`, `https://PlayFanatic.GG/` and `http://playfanatic.gg`
+  all look correct in a dashboard and all match nothing. `GET /health` reports
+  `cors_origins`, so a misconfiguration is one page load to diagnose rather than
+  a generic "check your connection" in the browser.
 - **Users are matched on Google's `sub`, never on email.** An email can be
   changed or reassigned; matching on it is how one person ends up inside
   another person's account.

@@ -61,3 +61,46 @@ def test_localhost_is_not_trusted_in_production(monkeypatch):
 
     cfg = config(monkeypatch, FRONTEND_URL="https://playfanatic.gg", ENVIRONMENT="development")
     assert any("localhost" in o for o in cfg["allow_origins"])
+
+
+def test_frontend_url_without_a_scheme_still_produces_a_usable_origin(monkeypatch):
+    """A bare host in FRONTEND_URL never matches an Origin header, so every
+    request is blocked while the variable looks correctly set."""
+    cfg = config(monkeypatch, FRONTEND_URL="playfanatic.gg")
+    assert "https://playfanatic.gg" in cfg["allow_origins"]
+    assert "https://www.playfanatic.gg" in cfg["allow_origins"]
+
+
+def test_origin_case_and_trailing_path_are_normalised(monkeypatch):
+    """Origin headers are lowercase scheme+host with no path; anything else
+    configured here silently matches nothing."""
+    cfg = config(monkeypatch, FRONTEND_URL="HTTPS://PlayFanatic.GG/host")
+    assert "https://playfanatic.gg" in cfg["allow_origins"]
+
+
+def test_health_reports_the_effective_origins(monkeypatch):
+    """Without this the only way to see what the server actually allows is
+    the deploy log, which scrolls away."""
+    import asyncio
+    import importlib
+
+    monkeypatch.setenv("FRONTEND_URL", "https://playfanatic.gg")
+    import main
+    importlib.reload(main)
+
+    body = asyncio.run(main.health())
+    assert "https://playfanatic.gg" in body["cors_origins"]
+    assert body["cors_credentials"] is True
+
+
+def test_http_configured_for_a_real_host_also_accepts_https(monkeypatch):
+    """The site is served over https whatever the variable says, so an http
+    value here blocks everything. Trusting the https form of the same host is
+    strictly the safer transport, not a wider trust."""
+    cfg = config(monkeypatch, FRONTEND_URL="http://playfanatic.gg")
+    assert "https://playfanatic.gg" in cfg["allow_origins"]
+
+
+def test_localhost_does_not_grow_an_https_twin(monkeypatch):
+    cfg = config(monkeypatch, FRONTEND_URL="http://localhost:3000")
+    assert "https://localhost:3000" not in cfg["allow_origins"]

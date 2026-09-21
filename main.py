@@ -32,6 +32,28 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Trivia API", version="0.1.0", lifespan=lifespan)
 
+def _normalise_origin(raw: str) -> str:
+    """
+    Reduce a configured value to the form a browser actually sends.
+
+    An `Origin` header is lowercase scheme + host (+ port) and nothing else, and
+    CORSMiddleware compares it as a literal string. So `playfanatic.gg`,
+    `https://PlayFanatic.gg/` and `https://playfanatic.gg/host` all look right
+    in the dashboard and all match nothing — every request fails with no
+    `Access-Control-Allow-Origin` header and the frontend can only say
+    "check your connection". A missing scheme becomes https; http is left
+    alone so local development still works.
+    """
+    value = raw.strip()
+    if not value:
+        return ""
+    if "://" not in value:
+        value = f"https://{value}"
+    scheme, _, rest = value.partition("://")
+    host = rest.split("/", 1)[0]
+    return f"{scheme.lower()}://{host.lower()}" if host else ""
+
+
 def _cors_config() -> dict:
     """
     Credentialed CORS needs explicit origins.
@@ -46,9 +68,8 @@ def _cors_config() -> dict:
     actually set up. Extra origins can be added with ALLOWED_ORIGINS
     (comma-separated).
     """
-    frontend = os.getenv("FRONTEND_URL", "").strip().rstrip("/")
-    extra = [o.strip().rstrip("/") for o in os.getenv("ALLOWED_ORIGINS", "").split(",") if o.strip()]
-    origins = [o for o in (frontend, *extra) if o]
+    raw = [os.getenv("FRONTEND_URL", ""), *os.getenv("ALLOWED_ORIGINS", "").split(",")]
+    origins = [o for o in (_normalise_origin(r) for r in raw) if o]
 
     # Accept the apex and www form of whatever was configured. A site served
     # at www. with FRONTEND_URL set to the apex (or the reverse) would
@@ -56,10 +77,17 @@ def _cors_config() -> dict:
     # create the game" with no HTTP response — points nowhere near CORS.
     for origin in list(origins):
         scheme, _, host = origin.partition("://")
-        if not host:
-            continue
         twin = host[4:] if host.startswith("www.") else f"www.{host}"
         origins.append(f"{scheme}://{twin}")
+
+    # A real host configured as http is served over https regardless, so the
+    # browser sends an https Origin and nothing matches. Same host, stricter
+    # transport — accepting it is not a wider trust. Localhost is exempt:
+    # there the http form is the real one.
+    for origin in list(origins):
+        scheme, _, host = origin.partition("://")
+        if scheme == "http" and not host.split(":")[0] in ("localhost", "127.0.0.1"):
+            origins.append(f"https://{host}")
 
     if not origins:
         print("[CORS] FRONTEND_URL unset — open policy, no credentials, sign-in disabled")
@@ -76,11 +104,14 @@ def _cors_config() -> dict:
     return {"allow_origins": origins, "allow_credentials": True}
 
 
+CORS = _cors_config()
+
+
 app.add_middleware(
     CORSMiddleware,
     allow_methods=["*"],
     allow_headers=["*"],
-    **_cors_config(),
+    **CORS,
 )
 
 app.include_router(games.router, prefix="/api/games", tags=["games"])
@@ -96,6 +127,12 @@ async def health():
         # False means broadcasts are staying in this process, so the service
         # must not be scaled past one instance.
         "ws_fanout": manager.fanout_active,
+        # A CORS misconfiguration blocks every call with no HTTP response, so
+        # the browser can only report a generic network error. Publishing the
+        # effective policy makes the diagnosis one page load instead of a hunt
+        # through a deploy log that has already scrolled away.
+        "cors_origins": CORS["allow_origins"],
+        "cors_credentials": CORS["allow_credentials"],
     }
 
 @app.websocket("/api/games/{code}/ws")
