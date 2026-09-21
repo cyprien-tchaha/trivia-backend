@@ -206,3 +206,35 @@ async def try_bank(db: AsyncSession, topics: str, difficulty: int, count: int):
         return None
 
     return await draw_from_bank(db, topic, difficulty, count)
+
+
+def suggest_banked_topics(category: str, query: str, limit: int = 8) -> list[str]:
+    """
+    Topic names we can serve from the bank, matching `query`, in the exact
+    casing seed_bank.py stored.
+
+    This exists so the host's title picker never depends on an upstream API
+    being reachable. The external title search soft-fails by design, and when
+    it does the dropdown goes empty — which left hosts with no way to choose a
+    valid topic at all. These suggestions need no network, and they steer
+    hosts toward the topics that cost nothing to serve.
+
+    Matching is deliberately loose: a prefix or substring of the canonical
+    name, or of any alias, since hosts type "mha" and "aot" as often as the
+    full title. An empty query lists the category so the picker can show
+    what's available before anything is typed.
+    """
+    n = _norm_topic(query)
+
+    out: list[str] = []
+    for display, canon in _CANONICAL_BY_NORM.items():
+        if BANK_TOPICS.get(canon) != category:
+            continue
+        if n:
+            # the canonical name plus every alias that points at it
+            haystacks = [canon] + [a for a, target in ALIASES.items() if target == canon]
+            if not any(n in h for h in haystacks):
+                continue
+        out.append(display)
+
+    return sorted(out)[:limit]

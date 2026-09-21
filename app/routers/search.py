@@ -14,6 +14,8 @@ showing an error toast. The user can still type and submit; they just won't
 see picker hints. That's the right tradeoff for autocomplete.
 """
 from fastapi import APIRouter, Query
+
+from app.services.question_bank_service import suggest_banked_topics
 from typing import Literal, Optional
 import httpx
 import os
@@ -138,6 +140,22 @@ async def _search_jikan(q: str) -> list[dict]:
     return out
 
 
+def _merge(banked: list[dict], upstream: list[dict]) -> list[dict]:
+    """Banked topics first, then upstream results that aren't duplicates.
+
+    Dedupe is on the normalised name: upstream returns "One Piece" too, and
+    showing it twice would let a host pick the non-banked copy of a topic we
+    could have served for free.
+    """
+    seen = {b["name"].strip().lower() for b in banked}
+    out = list(banked)
+    for item in upstream:
+        if item.get("name", "").strip().lower() in seen:
+            continue
+        out.append(item)
+    return out[:12]
+
+
 @router.get("")
 async def search_titles(
     category: Category = Query(..., description="One of: anime, tv_shows, movies"),
@@ -150,12 +168,29 @@ async def search_titles(
     # Don't even ask upstream for very short queries — most APIs return
     # garbage and it wastes the budget. The frontend should also debounce,
     # but we defend here too.
+    # Topics we can serve from the bank, matched locally. These come first and
+    # need no network, so the picker still offers valid choices when upstream
+    # is unreachable — which previously left the dropdown empty and the host
+    # unable to choose a topic at all. They also cost nothing to serve.
+    banked = [
+        {
+            "id": f"bank_{name.lower().replace(' ', '_')}",
+            "name": name,
+            "year": None,
+            "image_url": None,
+            "banked": True,
+        }
+        for name in suggest_banked_topics(category, q_normalized)
+    ]
+
+    # Upstream needs a couple of characters to return anything sensible; the
+    # local list does not, so a single character still shows banked topics.
     if len(q_normalized) < 2:
-        return {"results": []}
+        return {"results": banked}
 
     cached = _cache_get(category, q_normalized)
     if cached is not None:
-        return {"results": cached}
+        return {"results": _merge(banked, cached)}
 
     if category == "anime":
         results = await _search_jikan(q_normalized)
@@ -166,5 +201,7 @@ async def search_titles(
     else:
         results = []
 
+    # Cache only the upstream half. Banked suggestions are cheap to recompute
+    # and would otherwise go stale in the cache after a re-seed.
     _cache_put(category, q_normalized, results)
-    return {"results": results}
+    return {"results": _merge(banked, results)}
