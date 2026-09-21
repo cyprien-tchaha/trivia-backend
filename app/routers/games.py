@@ -6,6 +6,10 @@ from app.models import Game, Player, Question, Answer
 from app.schemas import CreateGameRequest, JoinGameRequest
 from app.websocket.manager import manager
 from app.game_loop import question_deadline, result_deadline, QUESTION_SECONDS
+from app.auth import current_user_optional
+from app.entitlements import may_create_game
+from app.models import User
+from typing import Optional
 from datetime import datetime, timezone
 import random, string, asyncio
 
@@ -36,7 +40,17 @@ def clock_fields(game: Game) -> dict:
     }
 
 @router.post("/create")
-async def create_game(req: CreateGameRequest, db: AsyncSession = Depends(get_db)):
+async def create_game(
+    req: CreateGameRequest,
+    db: AsyncSession = Depends(get_db),
+    user: Optional[User] = Depends(current_user_optional),
+):
+    allowed, reason = may_create_game(user, req.topics)
+    if not allowed:
+        # 402 rather than 403: this is not "you may never", it is "not on this
+        # plan", and the frontend can route it straight to an upgrade prompt.
+        raise HTTPException(status_code=402, detail=reason)
+
     code = gen_code()
     game = Game(
         code=code,
@@ -45,6 +59,8 @@ async def create_game(req: CreateGameRequest, db: AsyncSession = Depends(get_db)
         difficulty=req.difficulty,
         question_count=req.question_count,
         topics=req.topics,
+        # Null when hosting anonymously, which stays supported.
+        user_id=user.id if user else None,
     )
     db.add(game)
     await db.commit()
@@ -56,6 +72,8 @@ async def create_game(req: CreateGameRequest, db: AsyncSession = Depends(get_db)
         "category": game.category,
         "difficulty": game.difficulty,
         "question_count": game.question_count,
+        "hosted_by": user.email if user else None,
+        "plan": user.plan if user else "free",
     }
 
 @router.post("/{code}/join")

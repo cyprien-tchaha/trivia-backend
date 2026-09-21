@@ -79,6 +79,25 @@ Things that look wrong but are deliberate, and things that are genuinely wrong.
   game. Merging them would report a bank fault as an AI fault, sending whoever
   reads the log to the wrong file.
 
+## Accounts and entitlements
+
+- **`ENFORCE_ENTITLEMENTS` is off by default and must stay off until billing
+  exists.** Flipping it paywalls custom topics with no way to pay.
+- **`topic_is_free()` must keep calling `match_bank_topic()`.** It is what
+  keeps the billing boundary identical to the cost boundary. A test asserts
+  they agree for the same inputs; if that test fails, the pricing has drifted
+  from the economics.
+- **Match users on `google_sub`, never email.** Emails get reassigned.
+- **The Google id_token signature is intentionally unverified** because it
+  comes from the token endpoint over TLS with client auth. `aud`/`iss` are
+  checked. Never reuse that shortcut for a token a client hands us.
+- **The session cookie must stay HttpOnly + Secure + SameSite=lax.** Lax is
+  load-bearing: Strict drops the cookie on the redirect back from Google.
+- **`SECRET_KEY` missing raises instead of defaulting.** A predictable signing
+  key means anyone can mint a session for any account.
+- **`current_user_optional` is the default**, not `current_user`. Anonymous
+  hosting is a supported tier.
+
 ## Server game clock
 
 - **Every instance ticks; a claim decides who acts.** `claim_once()` keys on

@@ -1,7 +1,7 @@
 from contextlib import asynccontextmanager
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from app.routers import games, questions, search
+from app.routers import auth, games, questions, search
 from app.websocket.manager import manager
 from app import game_loop
 import asyncio
@@ -43,6 +43,7 @@ app.add_middleware(
 app.include_router(games.router, prefix="/api/games", tags=["games"])
 app.include_router(questions.router, prefix="/api/questions", tags=["questions"])
 app.include_router(search.router, prefix="/api/search", tags=["search"])
+app.include_router(auth.router, prefix="/api/auth", tags=["auth"])
 
 @app.get("/health")
 async def health():

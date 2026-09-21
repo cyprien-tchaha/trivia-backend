@@ -15,6 +15,7 @@ update live over a WebSocket.
 | Database | PostgreSQL |
 | Realtime | FastAPI WebSockets + Redis pub/sub fanout across instances |
 | AI | Anthropic SDK (`AsyncAnthropic`) |
+| Auth | Google OAuth for hosts; JWT sessions (PyJWT, HS256) |
 | External APIs | TMDB (movies/TV), Jikan (anime) |
 | Deploy | Railway (nixpacks) |
 
@@ -46,13 +47,20 @@ python show_bank.py                  # inspect what's banked
 python seed_questions.py <game_id>   # seed questions for one game
 ```
 
-There is **no test suite and no test runner.** See "Known gaps" below.
+```bash
+pip install -r requirements.txt -r requirements-dev.txt
+pytest                      # 120 tests; needs a local redis for the fanout suite
+```
 
 ## Environment
 
 | Var | Required | Used by |
 |---|---|---|
 | `DATABASE_URL` | yes | `app/database.py` |
+| `SECRET_KEY` | yes (for auth) | `app/auth.py`. Signs host sessions. Absent, signing **refuses** rather than falling back to a default — a predictable key lets anyone mint a session for any account. |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` / `GOOGLE_REDIRECT_URI` | for sign-in | `app/routers/auth.py`. Without them `/api/auth/google/*` returns 503 and everything else still works. |
+| `FRONTEND_URL` | for sign-in | Where the OAuth callback sends the host back to. |
+| `ENFORCE_ENTITLEMENTS` | no | `app/entitlements.py`, **default off**. See the entitlements note below. Do not turn on before billing ships. |
 | `ANTHROPIC_API_KEY` | yes | `app/services/ai_service.py` |
 | `TMDB_API_KEY` | no | `app/routers/search.py` (all three categories; anime is filtered out of TMDB by genre + language) |
 | `QUESTION_SECONDS` | no | `app/game_loop.py`, default 60. Matches the countdown the client renders. |
@@ -79,8 +87,8 @@ WS     Client → /api/games/{code}/ws → ConnectionManager.rooms{code: [socket
                 → each delivers to its own local sockets
 ```
 
-**Data model:** `Game` (6-char `code`, `status` lobby→active→finished,
-`current_question_index`, plus `phase`/`phase_ends_at` for the server clock) owns `Player`, `Question` and `Answer`. `QuestionBank`
+**Data model:** `User` is a **host** account (Google-backed). `Game` (6-char `code`, `status` lobby→active→finished,
+`current_question_index`, plus `phase`/`phase_ends_at` for the server clock) owns `Player`, `Question` and `Answer`, and carries a nullable `user_id` for the host who created it. `QuestionBank`
 is standalone — pre-generated rows keyed by `(topic, difficulty)`, copied into
 `Question` rows when a game draws from it.
 
@@ -88,6 +96,30 @@ All IDs are `String` UUIDs generated in Python (`gen_uuid()`), not native
 Postgres `uuid`.
 
 ## Design decisions that are deliberate — don't "fix" these
+
+- **Players are not users; only hosts have accounts.** Joining takes a code
+  and a nickname. Requiring a signup to answer trivia at a party is how you
+  lose the party, and `Player` is anonymous by design.
+- **Hosting anonymously is the free tier, not a degraded state.**
+  `games.user_id` is nullable and `current_user_optional` is the default
+  dependency. What gates a game is the topic, not whether anyone signed in.
+- **`ENFORCE_ENTITLEMENTS` defaults to off and must stay off until billing
+  ships.** The check is written and tested so the flip is one variable, but
+  enforcing a paywall with no way to pay would take a working feature away
+  from every existing host and offer nothing back.
+- **The free/paid line is the cost line.** `entitlements.topic_is_free()`
+  calls the same `match_bank_topic()` the generator uses to decide bank vs
+  AI — so what we charge for and what actually costs us cannot drift apart.
+  There is a test asserting they agree.
+- **Users are matched on Google's `sub`, never on email.** An email can be
+  changed or reassigned; matching on it is how one person ends up inside
+  another person's account.
+- **The Google `id_token` signature is not verified, deliberately.** It comes
+  straight back from Google's token endpoint over TLS authenticated with our
+  client secret, so provenance is established by the channel — Google
+  documents this case. `aud` and `iss` are still checked. That reasoning does
+  **not** extend to an `id_token` supplied by a client: if one is ever
+  accepted from a request body, it must be verified against Google's JWKS.
 
 - **The server owns the game clock; the host's controls are an override.**
   `app/game_loop.py` ticks once a second on every instance, finds active games
@@ -174,16 +206,18 @@ the bank with `python seed_bank.py`; inspect it with `python show_bank.py`.
 
 Real, and worth knowing before you touch nearby code:
 
-- **Test coverage is narrow.** There is a suite now (`pytest`, 42 tests) but it
-  covers only the question bank and its wiring. Scoring (`100 + speed_bonus`),
-  the duplicate-answer guard in `/answer`, and the `all_answered` counting race
-  are still untested and are the parts that most need it.
+- **No billing yet.** Accounts, plans and the entitlement check exist; there
+  is no payment integration, so nothing can move a user from `free` to `pro`
+  except a manual `UPDATE users SET plan='pro'`.
+- **Test coverage is uneven.** 120 tests, covering the question bank, search,
+  WebSocket fanout, the game clock and auth. Scoring
+  (`100 + speed_bonus`), the duplicate-answer guard in `/answer`, and the
+  `all_answered` counting race are still untested and are the parts that most
+  need it.
 - **`app/services/game_service.py` is an empty file.**
 - **Migrations are hand-written SQL** in `migrate.py`, applied top to bottom on
   every run via `IF NOT EXISTS`. Alembic is installed but not initialised. Add
   new DDL to that list, idempotently.
-- **`requirements.txt` is UTF-16 LE with CRLF** (written by PowerShell). pip
-  handles the BOM, but it's unreadable in diffs and breaks non-pip tooling.
 - **CORS is `allow_origins=["*"]`**, and `/{code}/admin`, `/{code}/reset` and
   `/{code}/players/{id}/remove` have no authentication — anyone holding a game
   code can reset a live game.

@@ -56,6 +56,32 @@ MIGRATIONS = [
     ON games (status, phase_ends_at)
     WHERE status = 'active';
     """,
+
+    # Host accounts. Players stay anonymous.
+    """
+    CREATE TABLE IF NOT EXISTS users (
+        id            VARCHAR PRIMARY KEY,
+        google_sub    VARCHAR NOT NULL UNIQUE,
+        email         VARCHAR NOT NULL,
+        name          VARCHAR,
+        picture_url   VARCHAR,
+        plan          VARCHAR NOT NULL DEFAULT 'free',
+        created_at    TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+        last_login_at TIMESTAMP WITH TIME ZONE
+    );
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS ix_users_email ON users (email);
+    """,
+    # Nullable with no backfill: every existing game was hosted anonymously
+    # and stays that way. Anonymous hosting is the free tier, not a gap.
+    """
+    ALTER TABLE games
+    ADD COLUMN IF NOT EXISTS user_id VARCHAR REFERENCES users(id);
+    """,
+    """
+    CREATE INDEX IF NOT EXISTS ix_games_user_id ON games (user_id);
+    """,
 ]
 
 

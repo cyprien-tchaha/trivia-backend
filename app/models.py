@@ -8,11 +8,38 @@ import uuid
 def gen_uuid():
     return str(uuid.uuid4())
 
+class User(Base):
+    """
+    A host. Players are deliberately not users — joining a game takes a code
+    and a nickname and nothing else, because making people sign up to answer
+    trivia at a party is how you lose the party.
+
+    Identity comes from Google, so there is no password here to store, leak or
+    reset.
+    """
+    __tablename__ = "users"
+    id            = Column(String, primary_key=True, default=gen_uuid)
+    #: Google's stable subject id. The email can change; this cannot, so it is
+    #: what we match on.
+    google_sub    = Column(String, unique=True, nullable=False, index=True)
+    email         = Column(String, nullable=False, index=True)
+    name          = Column(String, nullable=True)
+    picture_url   = Column(String, nullable=True)
+    #: "free" or "pro". Free hosts play banked topics, which cost nothing to
+    #: serve; pro hosts can generate questions for any title, which does.
+    plan          = Column(String, nullable=False, default="free")
+    created_at    = Column(DateTime(timezone=True), server_default=func.now())
+    last_login_at = Column(DateTime(timezone=True), nullable=True)
+
+
 class Game(Base):
     __tablename__ = "games"
     id                     = Column(String, primary_key=True, default=gen_uuid)
     code                   = Column(String(6), unique=True, nullable=False, index=True)
     host_name              = Column(String, nullable=False)
+    #: Null for games created without signing in. Those still work — anonymous
+    #: hosting is the free tier, not a degraded state.
+    user_id                = Column(String, ForeignKey("users.id"), nullable=True, index=True)
     status                 = Column(String, default="lobby")
     category               = Column(String, default="anime")
     difficulty             = Column(Integer, default=1)
