@@ -7,3 +7,7 @@ __pycache__/
 
 # Spartan AI config (contains API keys)
 .spartan/ai.env
+
+# Redis snapshot, written into the working directory by a locally-started
+# redis-server (docker compose keeps its own in a volume).
+dump.rdb
